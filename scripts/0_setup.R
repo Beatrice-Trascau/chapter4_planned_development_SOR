@@ -1,5 +1,5 @@
 ##----------------------------------------------------------------------------##
-# PAPER 4: PLANNED AREA DEVELOPMENTS AND SPECIES OCCURRENCE RECORDS
+# PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
 # 0_setup
 # This script contains code which loads/installs necessary packages and defines
 # functions used in the analysis
