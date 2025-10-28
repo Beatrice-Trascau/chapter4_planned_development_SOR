@@ -11,6 +11,9 @@
 library(here)
 source(here("scripts", "0_setup.R"))
 
+# Dataset was originally downloaded on 28.10.2025 from https://maps.nina.no/planlagt-utbyggingsareal-i-norge
+  # then uploaded to Google Drive for easier download in the R project
+
 # Authenticate with Google - will open a new browser window
 drive_auth()
 # When running this for the first time:
