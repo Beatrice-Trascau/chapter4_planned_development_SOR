@@ -1,8 +1,8 @@
 ##----------------------------------------------------------------------------##
-# PAPER 4: PLANNED AREA DEVELOPMENTS AND SPECIES OCCURRENCE RECORDS
+# PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
 # 1.1_planlagt_preparation
-# This script contains code which loads and prepares the CORINE land cover 
-# CHANGE and STATUS layers for further analysis
+# This script contains code which downloads and prepares the "Planned 
+# development area in Norway" dataset from NINA
 ##----------------------------------------------------------------------------##
 
 # 1. DOWNLOAD AREA PLAN DATASET ------------------------------------------------
