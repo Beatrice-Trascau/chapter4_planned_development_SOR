@@ -34,4 +34,21 @@ drive_download(file = as_id(file_id),
                path = here("data", "raw_data", "nina_planagt.gpkg"),  
   overwrite = FALSE)
 
+# 2. INSPECT DATASET -----------------------------------------------------------
+
+# Read in data
+development_polygons <- st_read(here("data", "nina_planagt.gpkg"))
+
+# Check number of polygons
+nrow(development_polygons)
+
+# Check CRS
+st_crs(development_polygons)$input
+
+# Check column namnes
+colnames(development_polygons)
+
+# Check broad strucutre of dataset
+glimpse(development_polygons)
+
 # END OF SCRIPT ----------------------------------------------------------------
