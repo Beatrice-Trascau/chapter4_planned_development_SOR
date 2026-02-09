@@ -24,9 +24,9 @@ download_key <- occ_download(pred("gadm", "NOR"), # Norway
 # Check progress
 occ_download_wait(download_key)
 
-# Download key: 
-# Download link: 
-# DOI: 
+# Download key: 0004619-251025141854904 
+# Download link: https://api.gbif.org/v1/occurrence/download/request/0004619-251025141854904.zip
+# DOI: 10.15468/dl.ykqkyn
 
 # 3. IMPORT GBIF DOWNLOAD AND SAVE ---------------------------------------------
 
