@@ -37,7 +37,7 @@ drive_download(file = as_id(file_id),
 # 2. INSPECT DATASET -----------------------------------------------------------
 
 # Read in data
-development_polygons <- st_read(here("data", "nina_planagt.gpkg"))
+development_polygons <- st_read(here("data", "raw_data", "nina_planagt.gpkg"))
 
 # Check number of polygons
 nrow(development_polygons)
