@@ -19,7 +19,7 @@ install_load_package <- function(x) {
 
 # Define list of packages
 package_vec <- c("here", "sf", "dplyr", "ggplot2", "viridis", "ggspatial",
-                 "scales", "terra")
+                 "scales", "terra", "geodata")
 
 # Execute the function
 sapply(package_vec, install_load_package)
