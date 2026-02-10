@@ -92,3 +92,139 @@ cat("Polygons without occurrences: ", sum(polygon_all_data$n_occurrences == 0), 
 saveRDS(polygon_all_data,
         here("data", "derived_data", "polygons_occurrences_all_data.rds"))
 
+# 3. PLOT EXPLORATORY FIGURES --------------------------------------------------
+
+## 3.1. Number of Species Occurrence Records (SOR) per polygon -----------------
+
+# Calculate histogram counts for non-zero values
+nonzero_hist <- hist(log10(polygon_all_data$n_occurrences[polygon_all_data$n_occurrences > 0]),
+                     breaks = 50, plot = FALSE)
+
+# Get maximum number of occurrences in non-zero polygons
+max_nonzero_count <- max(nonzero_hist$counts)
+
+# Scaling factor between the two y axes
+scale_factor <- n_zeros / max_nonzero_count
+
+# Figure 1a - Histogram
+fig1a <- ggplot() +
+  # zero bar
+  geom_col(aes(x = 0, y = n_zeros),
+           fill = "steelblue", color = "white", width = 0.1) +
+  # non-zero histogram, counts scaled up to match primary y axis
+  geom_histogram(data = polygon_all_data |> filter(n_occurrences > 0),
+                 aes(x = log10(n_occurrences), y = after_stat(count) * scale_factor),
+                 bins = 50, fill = "steelblue", color = "white") +
+  scale_y_continuous(name     = "Number of polygons (zero SOR)",
+                     labels   = scales::comma,
+                     expand   = expansion(mult = c(0, 0.05)),
+                     sec.axis = sec_axis(~ . / scale_factor,
+                                         name   = "Number of polygons (>0 SOR)",
+                                         labels = scales::comma)) +
+  scale_x_continuous(breaks = c(0, log10(c(2, 11, 101, 1001, 10001))),
+                     labels = c("0", "1", "10", "100", "1,000", "10,000")) +
+  labs(x = "Number of SOR") +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 12),
+        axis.text  = element_text(size = 10))
+
+# Figure 1b - Occurrence "Accummulation Curve"
+fig1b <- ggplot(polygon_all_data,
+                aes(x = n_occurrences + 1,
+                    y = area_m2_numeric)) +
+  geom_point(alpha = 0.3, size  = 0.8, color = "steelblue") +
+  geom_smooth(color     = "black", linewidth = 0.8, se = TRUE) +
+  scale_x_log10(labels = scales::comma,
+                breaks = c(1, 10, 100, 1000, 10000)) +
+  scale_y_log10(labels = scales::comma,
+                breaks = c(100, 1000, 10000, 100000, 1000000)) +
+  labs(x = "Number of species occurrence records + 1 (log10 scale)",
+       y = expression(paste("Polygon area (m"^2, ") - log10 scale"))) +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 12),
+        axis.text  = element_text(size = 10))
+
+# Combine the two plots into a single figure
+figure1 <- plot_grid(fig1a, fig1b, labels = c("a)", "b)"))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure1_SOR_per_polygon.png"),
+       plot = figure1,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure1_SOR_per_polygon.pdf"),
+       plot = figure1,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+## 3.2. Number of Species per polygon ------------------------------------------
+
+# Recalculate zeros and scale factor for species
+n_zeros_sp      <- sum(polygon_all_data$n_species == 0)
+nonzero_hist_sp <- hist(log10(polygon_all_data$n_species[polygon_all_data$n_species > 0]),
+                        breaks = 50, plot = FALSE)
+max_nonzero_count_sp <- max(nonzero_hist_sp$counts)
+scale_factor_sp      <- n_zeros_sp / max_nonzero_count_sp
+
+
+# Figure 2a - Histogram
+fig2a <- ggplot() +
+  geom_col(aes(x = 0, y = n_zeros_sp),
+           fill = "steelblue", color = "white", width = 0.1) +
+  geom_histogram(data = polygon_all_data |> filter(n_species > 0),
+                 aes(x = log10(n_species), y = after_stat(count) * scale_factor_sp),
+                 bins = 50, fill = "steelblue", color = "white") +
+  scale_y_continuous(name     = "Number of polygons (zero species)",
+                     labels   = scales::comma,
+                     expand   = expansion(mult = c(0, 0)),
+                     limits   = c(0, n_zeros * 1.05),
+                     sec.axis = sec_axis(~ . / scale_factor_sp,
+                                         name   = "Number of polygons (>0 species)",
+                                         labels = scales::comma)) +
+  scale_x_continuous(breaks = c(0, log10(c(2, 11, 101, 1001, 10001))),
+                     labels = c("0", "1", "10", "100", "1,000", "10,000")) +
+  labs(x = "Number of species") +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 12),
+        axis.text  = element_text(size = 10))
+
+# Figure 2b - Species area curve
+fig2b <- ggplot(polygon_all_data,
+                aes(x = n_species + 1,
+                    y = area_m2_numeric)) +
+  geom_point(alpha = 0.3, size = 0.8, color = "steelblue") +
+  geom_smooth(color = "black", linewidth = 0.8, se = TRUE) +
+  scale_x_log10(labels = scales::comma,
+                breaks = c(1, 10, 100, 1000, 10000)) +
+  scale_y_log10(labels = scales::comma,
+                breaks = c(100, 1000, 10000, 100000, 1000000)) +
+  labs(x = "Number of species + 1 (log10 scale)",
+       y = expression(paste("Polygon area (m"^2, ") - log10 scale"))) +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 12),
+        axis.text  = element_text(size = 10))
+
+# Combine into single figure
+figure2 <- plot_grid(fig2a, fig2b, labels = c("a)", "b)"))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure2_species_per_polygon.png"),
+       plot = figure2,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure2_species_per_polygon.pdf"),
+       plot = figure2,
+       width = 20,
+       height = 16,
+       dpi = 600)
