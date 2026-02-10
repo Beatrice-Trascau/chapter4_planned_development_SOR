@@ -45,7 +45,7 @@ development_polygons <- development_polygons |>
 # Spatial join occurrences to polygon
 # each row in the result = one occurrence within one polygon
 # left = TRUE retains polygons with no occurrences (as rows with NA occurrence columns)
-polygon_occurrence_join <- st_join(development_polygons, occurrence_sf,
+polygon_occurrence_join <- st_join(development_polygons, occurrences_sf_crs,
                                    join = st_intersects,
                                    left = TRUE)
 
@@ -74,7 +74,7 @@ polygon_all_data <- polygon_occurrence_join |>
            arealformalsgruppe,
            english_categories,
            kommunenummer,
-           kommunenavn,
+           kommune,
            planlagt_areal_m2,
            area_m2_numeric) |>
   summarise(n_occurrences = sum(!is.na(gbifID)), # count non-NA rows = occurrences
@@ -84,9 +84,9 @@ polygon_all_data <- polygon_occurrence_join |>
             .groups = "drop")
 
 # Quick check that it makes sense
-cat("Total polygons in master df:  ", nrow(polygon_master), "\n")
-cat("Polygons with occurrences:    ", sum(polygon_master$n_occurrences > 0), "\n")
-cat("Polygons without occurrences: ", sum(polygon_master$n_occurrences == 0), "\n")
+cat("Total polygons in master df:  ", nrow(polygon_all_data), "\n")
+cat("Polygons with occurrences:    ", sum(polygon_all_data$n_occurrences > 0), "\n")
+cat("Polygons without occurrences: ", sum(polygon_all_data$n_occurrences == 0), "\n")
 
 # Save df to file
 saveRDS(polygon_all_data,
