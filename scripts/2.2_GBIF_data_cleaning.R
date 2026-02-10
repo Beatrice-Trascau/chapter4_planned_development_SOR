@@ -11,7 +11,7 @@ library(here)
 source(here("scripts", "0_setup.R"))
 
 # Load GBIF occurrence records
-here("data","raw_data", "occurrences_chapter4_October2025.txt")
+load(here("data","raw_data", "occurrences_chapter4_October2025.txt"))
 
 # 2. CLEAN RECORDS -------------------------------------------------------------
 
