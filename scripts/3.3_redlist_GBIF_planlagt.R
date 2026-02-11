@@ -80,3 +80,152 @@ redlist_harmonised <- redlist_clean |>
 # Check match quality
 cat("\nMatch type breakdown:\n")
 print(table(redlist_harmonised$match_type))
+
+# 3. JOIN RED LIST TO OCCURRENCE DATA ------------------------------------------
+
+# Recreate polygon_tax_join from polygon_occurrence_join
+# (one row per occurrence, only within development polygons, no NAs)
+polygon_tax_join <- polygon_occurrence_join |>
+  st_drop_geometry() |>
+  filter(!is.na(gbifID))
+
+# Join red list categories to occurrences by species name
+polygon_redlist_join <- polygon_tax_join |>
+  left_join(redlist_harmonised |> select(gbif_species, redlist_category),
+            by = c("species" = "gbif_species")) |>
+  # Label non-red-listed species
+  mutate(redlist_category = ifelse(is.na(redlist_category),
+                                   "Not listed", redlist_category))
+
+
+# 4. CALCULATE PROPORTIONS -----------------------------------------------------
+
+# Calculate proportion of occurrence records (SOR) per red list category per development category
+sor_proportions <- polygon_redlist_join |>
+  group_by(english_categories, redlist_category) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(english_categories) |>
+  mutate(proportion = n / sum(n)) |>
+  ungroup()
+
+# Get unique species per polygon, then join red list
+# Unnest species_list from polygon_all_data to get one row per species per polygon
+species_per_polygon <- polygon_all_data |>
+  filter(n_species > 0) |>
+  select(polygon_id, english_categories) |>
+  mutate(species = species_list) |>
+  # This requires tidyr which should be loaded
+  tidyr::unnest(cols = species_list) |>
+  rename(species = species_list) |>
+  distinct(english_categories, species) |>  # unique species per development category
+  left_join(redlist_harmonised |> select(gbif_species, redlist_category),
+            by = c("species" = "gbif_species")) |>
+  mutate(redlist_category = ifelse(is.na(redlist_category),
+                                   "Not listed", redlist_category))
+
+# Proportion of unique species per red list category per development category
+species_proportions <- species_per_polygon |>
+  group_by(english_categories, redlist_category) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(english_categories) |>
+  mutate(proportion = n / sum(n)) |>
+  ungroup()
+
+# 5. PLOT FIGURES --------------------------------------------------------------
+
+# Define colour palette for red list categories - order from most to least threatened
+category_order  <- c("CR", "EN", "VU", "NT", "LC", "DD", "Not listed")
+category_labels <- c("Critically Endangered (CR)", "Endangered (EN)",
+                     "Vulnerable (VU)", "Near Threatened (NT)",
+                     "Least Concern (LC)", "Data Deficient (DD)", "Not listed")
+category_colours <- c("CR" = "#d73027",
+                      "EN" = "#f46d43",
+                      "VU" = "#fdae61",
+                      "NT" = "#fee090",
+                      "LC" = "#74c476",
+                      "DD" = "#969696",
+                      "Not listed" = "grey90")
+
+# Set factor order for consistent ordering across both figures
+sor_proportions$redlist_category <- factor(sor_proportions$redlist_category,
+                                           levels = category_order)
+species_proportions$redlist_category <- factor(species_proportions$redlist_category,
+                                               levels = category_order)
+
+## 5.1. Figure based on SOR ----------------------------------------------------
+
+fig_redlist_sor <- ggplot(sor_proportions,
+                          aes(x    = english_categories,
+                              y    = proportion,
+                              fill = redlist_category)) +
+  geom_bar(stat      = "identity",
+           position  = "stack",
+           color     = "white",
+           linewidth = 0.3) +
+  scale_y_continuous(labels = scales::percent,
+                     expand = expansion(mult = c(0, 0.02))) +
+  scale_fill_manual(values = category_colours,
+                    labels = category_labels,
+                    name   = "Red list category") +
+  labs(x = "Development category",
+       y = "Proportion of occurrence records") +
+  theme_classic() +
+  theme(panel.grid   = element_blank(),
+        axis.title   = element_text(size = 12),
+        axis.text    = element_text(size = 10),
+        axis.text.x  = element_text(angle = 45, hjust = 1),
+        legend.title = element_text(size = 11),
+        legend.text  = element_text(size = 10))
+
+# Save figure
+ggsave(filename = here("figures", "Figure5a_redlist_SOR_per_development_type.png"),
+       plot     = fig_redlist_sor,
+       width    = 12,
+       height   = 8,
+       dpi      = 600)
+
+ggsave(filename = here("figures", "Figure5a_redlist_SOR_per_development_type.pdf"),
+       plot     = fig_redlist_sor,
+       width    = 12,
+       height   = 8,
+       dpi      = 600)
+
+## 5.2. Figure based on unique species -----------------------------------------
+
+fig_redlist_sp <- ggplot(species_proportions,
+                         aes(x    = english_categories,
+                             y    = proportion,
+                             fill = redlist_category)) +
+  geom_bar(stat      = "identity",
+           position  = "stack",
+           color     = "white",
+           linewidth = 0.3) +
+  scale_y_continuous(labels = scales::percent,
+                     expand = expansion(mult = c(0, 0.02))) +
+  scale_fill_manual(values = category_colours,
+                    labels = category_labels,
+                    name   = "Red list category") +
+  labs(x = "Development category",
+       y = "Proportion of unique species") +
+  theme_classic() +
+  theme(panel.grid   = element_blank(),
+        axis.title   = element_text(size = 12),
+        axis.text    = element_text(size = 10),
+        axis.text.x  = element_text(angle = 45, hjust = 1),
+        legend.title = element_text(size = 11),
+        legend.text  = element_text(size = 10))
+
+# Save figure
+ggsave(filename = here("figures", "Figure5b_redlist_species_per_development_type.png"),
+       plot     = fig_redlist_sp,
+       width    = 12,
+       height   = 8,
+       dpi      = 600)
+
+ggsave(filename = here("figures", "Figure5b_redlist_species_per_development_type.pdf"),
+       plot     = fig_redlist_sp,
+       width    = 12,
+       height   = 8,
+       dpi      = 600)
+
+# END OF SCRIPT ----------------------------------------------------------------
