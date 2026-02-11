@@ -20,7 +20,26 @@ clean_occurrences_15km <- read.csv(here("data", "derived_data",
 
 # 2. JOIN OCCURRENCES TO POLYGONS ----------------------------------------------
 
-## 2.1. Prepare spatial data ---------------------------------------------------
+## 2.1. Prepare development polygons -------------------------------------------
+
+# Add unique polygon ID to use as grouping factor after the join
+# Add english category names and numeric area column so they are available for
+# all subsequent joins and operations without needing to recreate them
+development_polygons <- development_polygons |>
+  mutate(polygon_id = row_number(),
+         area_m2_numeric = as.numeric(planlagt_areal_m2),
+         english_categories = case_when(arealformalsgruppe == "01 Bolig eller sentrumsformål" ~ "Residential",
+                                        arealformalsgruppe == "02 Fritidsbebyggelse" ~ "Recreational",
+                                        arealformalsgruppe == "03 Tjenesteyting" ~ "Services",
+                                        arealformalsgruppe == "04 Handel" ~ "Retail",
+                                        arealformalsgruppe == "05 Turistformål" ~ "Tourism",
+                                        arealformalsgruppe == "06 Næringsvirksomhet"~ "Commercial",
+                                        arealformalsgruppe == "07 Råstoffutvinning" ~ "Mining",
+                                        arealformalsgruppe == "08 Kombinerte formål" ~ "Combined",
+                                        arealformalsgruppe == "13 Forsvaret" ~ "Defense",
+                                        arealformalsgruppe == "16 Havner og småbåthavner" ~ "Ports"))
+
+## 2.2. Prepare spatial data ---------------------------------------------------
 
 # Convert occurrences to spatial points
 occurrences_sf <- clean_occurrences_15km |>
@@ -38,10 +57,6 @@ stopifnot(st_crs(development_polygons) == st_crs(occurrences_sf_crs))
 
 ## 2.2. Spatial join -----------------------------------------------------------
 
-# Add unique polygon ID to use as grouping factor after the join
-development_polygons <- development_polygons |>
-  mutate(polygon_id = row_number())
-
 # Spatial join occurrences to polygon
 # each row in the result = one occurrence within one polygon
 # left = TRUE retains polygons with no occurrences (as rows with NA occurrence columns)
@@ -50,21 +65,6 @@ polygon_occurrence_join <- st_join(development_polygons, occurrences_sf_crs,
                                    left = TRUE)
 
 ## 2.3. Convert to one big dataframe with all the information needed -----------
-
-# Convert planlagt_areal_m2 from character to numeric and translate category names
-# before summarising (as in 1_2_planlagt_exploration.R)
-polygon_occurrence_join <- polygon_occurrence_join |>
-  mutate(area_m2_numeric    = as.numeric(planlagt_areal_m2),
-         english_categories = case_when(arealformalsgruppe == "01 Bolig eller sentrumsformål" ~ "Residential",
-                                        arealformalsgruppe == "02 Fritidsbebyggelse"          ~ "Recreational",
-                                        arealformalsgruppe == "03 Tjenesteyting"              ~ "Services",
-                                        arealformalsgruppe == "04 Handel"                     ~ "Retail",
-                                        arealformalsgruppe == "05 Turistformål"               ~ "Tourism",
-                                        arealformalsgruppe == "06 Næringsvirksomhet"          ~ "Commercial",
-                                        arealformalsgruppe == "07 Råstoffutvinning"           ~ "Mining",
-                                        arealformalsgruppe == "08 Kombinerte formål"          ~ "Combined",
-                                        arealformalsgruppe == "13 Forsvaret"                  ~ "Defense",
-                                        arealformalsgruppe == "16 Havner og småbåthavner"     ~ "Ports"))
 
 # Convert dataframe to have 1 row per polygon 
 # retains key polygon metadata, occurrence counts, species counts and species identities
@@ -81,6 +81,8 @@ polygon_all_data <- polygon_occurrence_join |>
             n_species     = n_distinct(species[!is.na(species)]),   # number of unique species
             species_list  = list(unique(species[!is.na(species)])), # identity of species present
             kingdoms      = list(unique(kingdom[!is.na(kingdom)])), # kingdoms represented
+            classes       = list(unique(class[!is.na(class)])), 
+            phyla         = list(unique(phylum[!is.na(phylum)])), 
             .groups = "drop")
 
 # Quick check that it makes sense
@@ -102,6 +104,9 @@ nonzero_hist <- hist(log10(polygon_all_data$n_occurrences[polygon_all_data$n_occ
 
 # Get maximum number of occurrences in non-zero polygons
 max_nonzero_count <- max(nonzero_hist$counts)
+
+# Calculate the number of 0s
+n_zeros <- sum(polygon_all_data$n_occurrences == 0)
 
 # Scaling factor between the two y axes
 scale_factor <- n_zeros / max_nonzero_count
@@ -228,3 +233,66 @@ ggsave(filename = here("figures", "Figure2_species_per_polygon.pdf"),
        width = 20,
        height = 16,
        dpi = 600)
+
+## 3.3. Taxonomic breakdown of occurrences in development polygons -------------
+
+# Classify occurrences into taxonomic groups
+polygon_tax_join <- polygon_occurrence_join |>
+  st_drop_geometry() |>
+  filter(!is.na(gbifID)) |>  # remove polygons with no occurrences
+  mutate(taxonomic_group = case_when(kingdom == "Plantae" ~ "Plants",
+                                     class   == "Aves" ~ "Birds",
+                                     phylum  == "Arthropoda" ~ "Arthropods",
+                                     class   == "Mammalia" ~ "Mammals",
+                                     kingdom == "Fungi" ~ "Fungi",
+                                     TRUE  ~ "Other"))
+
+# Calculate proportion of each group per development category
+tax_proportions <- polygon_tax_join |>
+  group_by(english_categories, taxonomic_group) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(english_categories) |>
+  mutate(proportion = n / sum(n)) |>
+  ungroup()
+
+# Define colour palette for taxonomic groups
+tax_colours <- c("Plants" = "#2d9e2d",
+                 "Birds" = "#4a90d9",
+                 "Arthropods" = "#d4a017",
+                 "Mammals" = "#d95f4a",
+                 "Fungi" = "#9b59b6",
+                 "Other" = "grey70")
+
+# Plot stacked barplot of proportion of occurrences belongoing to each group
+# within the planned development polygons
+figure4 <- ggplot(tax_proportions, aes(x = english_categories, y = proportion,
+                                       fill = taxonomic_group)) +
+  geom_bar(stat = "identity", position = "stack", color = "white", linewidth = 0.3) +
+  scale_y_continuous(labels = scales::percent,
+                     expand = expansion(mult = c(0, 0.02))) +
+  scale_fill_manual(values = tax_colours,
+                    name   = "Taxonomic group") +
+  labs(x = "Development category",
+       y = "Proportion of occurrences") +
+  theme_classic() +
+  theme(panel.grid   = element_blank(),
+        axis.title   = element_text(size = 12),
+        axis.text    = element_text(size = 10),
+        axis.text.x  = element_text(angle = 45, hjust = 1),
+        legend.title = element_text(size = 11),
+        legend.text  = element_text(size = 10))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure4_taxonomic_breakdown_per_development_type.png"),
+       plot = figure4,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure4_taxonomic_breakdown_per_development_type.pdf"),
+       plot = figure4,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
