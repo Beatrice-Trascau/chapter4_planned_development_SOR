@@ -12,7 +12,7 @@ library(here)
 source(here("scripts", "0_setup.R"))
 
 # Load red list
-redlist_raw <- read_excel(here("data", "raw_data", "redlist.xlsx"))
+redlist_raw <- read_excel(here("data", "raw_data", "rødliste-2021.xlsx"))
 
 # Load polygon occurrence join (one row per occurrence, needed for SOR-based figures)
 polygon_all_data <- readRDS(here("data", "derived_data",
@@ -61,7 +61,7 @@ if (file.exists(here("data", "derived_data", "redlist_backbone_lookup.rds"))) {
     Sys.sleep(2) # pause between batches to avoid overwhelming the API
   }
   
-  backbone_lookup <- do.call(rbind, backbone_results)
+  backbone_lookup <- bind_rows(backbone_results)
   
   # aave to file so this never needs to be rerun
   saveRDS(backbone_lookup,
@@ -80,6 +80,11 @@ redlist_harmonised <- redlist_clean |>
 # Check match quality
 cat("\nMatch type breakdown:\n")
 print(table(redlist_harmonised$match_type))
+
+# Keep only exact matches and remove duplicate GBIF species
+redlist_harmonised <- redlist_harmonised |>
+  filter(match_type == "EXACT") |>
+  distinct(gbif_species, .keep_all = TRUE)
 
 # 3. JOIN RED LIST TO OCCURRENCE DATA ------------------------------------------
 
@@ -112,12 +117,10 @@ sor_proportions <- polygon_redlist_join |>
 # Unnest species_list from polygon_all_data to get one row per species per polygon
 species_per_polygon <- polygon_all_data |>
   filter(n_species > 0) |>
-  select(polygon_id, english_categories) |>
-  mutate(species = species_list) |>
-  # This requires tidyr which should be loaded
+  select(polygon_id, english_categories, species_list) |>
   tidyr::unnest(cols = species_list) |>
   rename(species = species_list) |>
-  distinct(english_categories, species) |>  # unique species per development category
+  distinct(english_categories, species) |>
   left_join(redlist_harmonised |> select(gbif_species, redlist_category),
             by = c("species" = "gbif_species")) |>
   mutate(redlist_category = ifelse(is.na(redlist_category),
@@ -152,8 +155,7 @@ sor_proportions$redlist_category <- factor(sor_proportions$redlist_category,
 species_proportions$redlist_category <- factor(species_proportions$redlist_category,
                                                levels = category_order)
 
-## 5.1. Figure based on SOR ----------------------------------------------------
-
+# Stacked barplot of redlisted status of proportion of occurrences
 fig_redlist_sor <- ggplot(sor_proportions,
                           aes(x    = english_categories,
                               y    = proportion,
@@ -174,24 +176,10 @@ fig_redlist_sor <- ggplot(sor_proportions,
         axis.title   = element_text(size = 12),
         axis.text    = element_text(size = 10),
         axis.text.x  = element_text(angle = 45, hjust = 1),
-        legend.title = element_text(size = 11),
-        legend.text  = element_text(size = 10))
+        legend.position = "none")
 
-# Save figure
-ggsave(filename = here("figures", "Figure5a_redlist_SOR_per_development_type.png"),
-       plot     = fig_redlist_sor,
-       width    = 12,
-       height   = 8,
-       dpi      = 600)
 
-ggsave(filename = here("figures", "Figure5a_redlist_SOR_per_development_type.pdf"),
-       plot     = fig_redlist_sor,
-       width    = 12,
-       height   = 8,
-       dpi      = 600)
-
-## 5.2. Figure based on unique species -----------------------------------------
-
+# Stacked barplot of redlisted status of unique species
 fig_redlist_sp <- ggplot(species_proportions,
                          aes(x    = english_categories,
                              y    = proportion,
@@ -215,15 +203,30 @@ fig_redlist_sp <- ggplot(species_proportions,
         legend.title = element_text(size = 11),
         legend.text  = element_text(size = 10))
 
+# Extract legend from the right panel
+legend <- get_legend(fig_redlist_sp)
+
+# Remove legend from right panel
+fig_redlist_sp_no_legend <- fig_redlist_sp + theme(legend.position = "none")
+
+# Combine plots with aligned sizes
+plots <- plot_grid(fig_redlist_sor, fig_redlist_sp_no_legend,
+                   labels = c("a)", "b)"),
+                   align = "h",
+                   axis = "tb")
+
+# Add legend to the right
+figure5 <- plot_grid(plots, legend, rel_widths = c(3, 0.4))
+
 # Save figure
-ggsave(filename = here("figures", "Figure5b_redlist_species_per_development_type.png"),
-       plot     = fig_redlist_sp,
+ggsave(filename = here("figures", "Figure5_redlist_species_and_occurrences_per_development_type.png"),
+       plot     = figure5,
        width    = 12,
        height   = 8,
        dpi      = 600)
 
-ggsave(filename = here("figures", "Figure5b_redlist_species_per_development_type.pdf"),
-       plot     = fig_redlist_sp,
+ggsave(filename = here("figures", "Figure5_redlist_species_and_occurrences_per_development_type.pdf"),
+       plot     = figure5,
        width    = 12,
        height   = 8,
        dpi      = 600)
