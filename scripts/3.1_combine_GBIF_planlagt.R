@@ -15,8 +15,8 @@ source(here("scripts", "0_setup.R"))
 development_polygons <- st_read(here("data", "raw_data", "nina_planagt.gpkg"))
 
 # Load cleaned occurrence records
-clean_occurrences_15km <- read.csv(here("data", "derived_data",
-                                        "clean_occurrences_15km.txt"))
+clean_occurrences_70m <- read.csv(here("data", "derived_data",
+                                        "clean_occurrences_70m.txt"))
 
 # 2. JOIN OCCURRENCES TO POLYGONS ----------------------------------------------
 
@@ -42,7 +42,7 @@ development_polygons <- development_polygons |>
 ## 2.2. Prepare spatial data ---------------------------------------------------
 
 # Convert occurrences to spatial points
-occurrences_sf <- clean_occurrences_15km |>
+occurrences_sf <- clean_occurrences_70m |>
   # remove occurrences with NA for either longitude or latitude
   filter(!is.na(decimalLongitude),
          !is.na(decimalLatitude)) |>
@@ -296,3 +296,4 @@ ggsave(filename = here("figures", "Figure4_taxonomic_breakdown_per_development_t
        height = 16,
        dpi = 600)
 
+# END OF SCRIPT ----------------------------------------------------------------
