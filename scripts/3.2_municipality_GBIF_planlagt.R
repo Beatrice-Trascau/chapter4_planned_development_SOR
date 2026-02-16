@@ -13,8 +13,8 @@ library(here)
 source(here("scripts", "0_setup.R"))
 
 # Load cleaned occurrence records
-clean_occurrences_15km <- read.csv(here("data", "derived_data",
-                                        "clean_occurrences_15km.txt"))
+clean_occurrences_70m <- read.csv(here("data", "derived_data",
+                                        "clean_occurrences_70m.txt"))
 
 # Load polygon dataframe
 polygon_all_data <- readRDS(here("data", "derived_data",
@@ -53,7 +53,7 @@ norway_municipalities_sf <- st_intersection(norway_municipalities_sf, norway_lan
 ## 2.2. Convert occurrences to sf spatial points -------------------------------
 
 # Convert occurrences to sf spatial points (GBIF uses WGS84)
-occurrences_sf <- clean_occurrences_15km |>
+occurrences_sf <- clean_occurrences_70m |>
   filter(!is.na(decimalLongitude),
          !is.na(decimalLatitude)) |>
   st_as_sf(coords = c("decimalLongitude", "decimalLatitude"),
