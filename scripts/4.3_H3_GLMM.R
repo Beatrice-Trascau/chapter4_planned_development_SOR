@@ -140,7 +140,8 @@ if(lrt_result$`Pr(>Chisq)`[2] < 0.05) {
 # Generate predictions across the range of observed areas for each development category
 predictions <- ggpredict(h3_model1_zinb_interaction, 
                          terms = c("log_area [all]", "development_category"),
-                         type = "fixed")
+                         type = "fixed",
+                         bias_correction = TRUE)
 
 # Convert predictions to data frame for plotting
 pred_df <- as.data.frame(predictions)
@@ -152,32 +153,21 @@ category_colours <- viridis(n_distinct(model_data$development_category),
                             option = "turbo")
 names(category_colours) <- levels(model_data$development_category)
 
+
 # Plot predicted SOR vs log(Area) for each development category
-fig_h3_predictions <- ggplot() +
-  # add raw data points (semi-transparent)
-  geom_point(data = model_data,
-             aes(x = log_area, y = n_occurrences, color = development_category),
-             alpha = 0.2, size = 0.8) +
-  # sdd model predictions with confidence intervals
-  geom_line(data = pred_df,
-            aes(x = x, y = predicted, color = group),
-            linewidth = 1.2) +
-  geom_ribbon(data = pred_df,
-              aes(x = x, y = predicted, ymin = conf.low, ymax = conf.high, fill = group),
-              alpha = 0.2) +
-  scale_color_manual(values = category_colours,
-                     name = "Development category") +
-  scale_fill_manual(values = category_colours,
-                    name = "Development category") +
+fig_h3_predictions <- ggplot(pred_df, aes(x = x, y = predicted)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  facet_wrap(~group, scales = "free_y", ncol = 3) +
   labs(x = expression(paste("Log(Polygon area (m"^2, "))")),
        y = "Predicted number of species occurrence records") +
   theme_classic() +
   theme(panel.grid = element_blank(),
         axis.title = element_text(size = 12),
         axis.text = element_text(size = 10),
-        legend.position = "right",
-        legend.title = element_text(size = 11),
-        legend.text = element_text(size = 9),
+        strip.background = element_rect(fill = "grey90", color = "black"),
+        strip.text = element_text(size = 10, face = "bold"),
         plot.title = element_text(size = 14, face = "bold"),
         plot.subtitle = element_text(size = 11))
 
@@ -205,11 +195,6 @@ write.csv(slopes_df,
           here("figures", "Table_H3_slopes_by_category.csv"),
           row.names = FALSE)
 
-ggsave(filename = here("figures", "Figure_H3_area_SOR_by_category.pdf"),
-       plot = fig_h3_predictions,
-       width = 14,
-       height = 8,
-       dpi = 600)
 
 # 7. POST-HOC PAIRWISE COMPARISONS (if interaction is significant) ------------
 
