@@ -13,6 +13,9 @@ source(here("scripts", "0_setup.R"))
 # Load GBIF occurrence records
 load(here("data","raw_data", "occurrences_chapter4_October2025.txt"))
 
+# Load development polygons
+development_polygons <- st_read(here("data", "raw_data", "nina_planagt.gpkg"))
+
 # 2. CLEAN RECORDS -------------------------------------------------------------
 
 # Original number of occurrences in raw dataframe: 
@@ -77,10 +80,26 @@ clean_occurrences <- clean_occurrences4 |>
 
 # 4. REMOVE RECORDS BASED ON COORDINATE UNCERTAINTY ----------------------------
 
+## 4.1. Calculate coordinate uncertainty threshold -----------------------------
+
+# Convert area column to numeric
+development_polygons$area_m2_numeric <- as.numeric(development_polygons$planlagt_areal_m2)
+
+# Calculate median polygon area - excludig ports and marina since we are only looking
+  # at terrestrial communities
+median_area_m2 <- development_polygons |>
+  st_drop_geometry() |>
+  filter(arealformalsgruppe != "16 Havner og småbåthavner") |>
+  summarise(median_area = median(area_m2_numeric, na.rm = TRUE)) |>
+  pull(median_area)
+
+# Calculate square root of median polygon size
+coord_uncertainty_threshold <- sqrt(median_area_m2)
+
 # Largest polygon in planned development = 18 km2 => Only keep records with coordinate uncertainty lower than 15km (15000m)
 # Remove records with coord uncertainty >15000m
 clean_occurrences_15km <- clean_occurrences |>
-  filter(coordinateUncertaintyInMeters < 15000 &
+  filter(coordinateUncertaintyInMeters < coord_uncertainty_threshold &
            !is.na(coordinateUncertaintyInMeters))
 
 # Check how many records are left in the cleaned df
@@ -97,6 +116,6 @@ nrow(clean_occurrences_15km) #
 
 # Save cleaned occurrences
 write.csv(clean_occurrences_15km,
-          here("data", "derived_data", "clean_occurrences_15km.txt"))
+          here("data", "derived_data", "clean_occurrences_70m.txt"))
 
 # END OF SCRIPT ----------------------------------------------------------------
