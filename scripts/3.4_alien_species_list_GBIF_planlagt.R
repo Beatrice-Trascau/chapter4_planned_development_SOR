@@ -263,6 +263,12 @@ alien_risk_sor$risk_category <- factor(alien_risk_sor$risk_category,
 alien_risk_sp$risk_category <- factor(alien_risk_sp$risk_category,
                                       levels = risk_order)
 
+# Remove native species
+alien_risk_sor <- alien_risk_sor |>
+  filter(risk_category != "Native")
+alien_risk_sp <- alien_risk_sp |>
+  filter(risk_category != "Native")
+
 # Figure 7a: Risk categories (SOR)
 fig7a <- ggplot(alien_risk_sor,
                 aes(x    = english_categories,
@@ -324,7 +330,6 @@ plots <- plot_grid(fig7a, fig7b_no_legend,
 
 # Add legend to the right
 figure7 <- plot_grid(plots, legend, rel_widths = c(3, 0.4))
-
 
 # Save figure
 ggsave(filename = here("figures", "Figure7_alien_risk_categories_in_polygons.png"),
