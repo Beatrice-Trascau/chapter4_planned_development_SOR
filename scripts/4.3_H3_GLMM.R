@@ -40,6 +40,18 @@ model_data <- model_data |>
          !is.na(kommune_factor))
 
 # Check sample size for model
-cat("\nFinal sample size for model:", nrow(model_data), "polygons\n")
 cat("Number of municipalities:", n_distinct(model_data$kommune_factor), "\n")
 cat("Development categories:", paste(levels(model_data$development_category), collapse = ", "), "\n")
+
+# 3. FIT MODELS ----------------------------------------------------------------
+
+## 3.1. Zero inflated + interaction --------------------------------------------
+
+# Fit model
+h3_model1_zinb_interaction <- glmmTMB(n_occurrences ~ log_area * development_category + (1|kommune_factor),
+                                      data = model_data,
+                                      family = nbinom2,
+                                      ziformula = ~log_area + development_category)
+
+# Save model
+
