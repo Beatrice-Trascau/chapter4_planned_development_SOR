@@ -136,13 +136,104 @@ cat("Polygons without land cover:",
 cat("Buffers without land cover:", 
     sum(is.na(polygon_buffers$land_cover_name)), "\n")
 
+# 4. GET OCCURRENCE & SPECIES DATA IN POLYGONS ---------------------------------
 
+## 4.1. Prepare occurrence records ---------------------------------------------
 
+# Convert occurrences to spatial points (keep only records with valid coordinates)
+occurrences_sf <- clean_occurrences_70m |>
+  filter(!is.na(decimalLongitude), !is.na(decimalLatitude)) |>
+  st_as_sf(coords = c("decimalLongitude", "decimalLatitude"), crs = 4326)
 
+# Transform occurrences to match the CRS of the polygons
+occurrences_sf <- st_transform(occurrences_sf, 25833)
 
+## 4.2. Count occurrences and extract species lists for polygons & buffers -----
 
+# Create function to count occurrences and retain species-level information within each polygon/buffer
+  # returns  one row per polygon with:
+  #- n_occurrences: total SOR count 
+  #- n_species: number of unique species 
+  #- species_list: identity of species present 
+count_occurrences_with_species <- function(polygons, occurrences) {
+  
+  # spatial join: one row per occurrence per polygon
+  joined <- st_join(polygons |> select(polygon_id),
+                    occurrences |> select(gbifID, species),
+                    join = st_intersects,
+                    left = TRUE)
+  
+  # summarise to one row per polygon
+  summary <- joined |>
+    st_drop_geometry() |>
+    group_by(polygon_id) |>
+    summarise(n_occurrences = sum(!is.na(gbifID)),
+              n_species     = n_distinct(species[!is.na(species)]),
+              species_list  = list(unique(species[!is.na(species)])),
+              .groups = "drop")
+  
+  # join summary back to polygons to retain all polygon metadata
+  polygons_with_counts <- polygons |>
+    st_drop_geometry() |>
+    left_join(summary, by = "polygon_id")
+  
+  return(polygons_with_counts)
+}
 
+# Count occurrences for development polygons
+cat("  Counting in development polygons...\n")
+development_with_counts <- count_occurrences_with_species(development_polygons_filtered,
+                                                          occurrences_sf)
 
+# Count occurrences for buffers
+cat("  Counting in buffers...\n")
+buffers_with_counts <- count_occurrences_with_species(polygon_buffers,
+                                                      occurrences_sf)
 
+cat("Occurrence counting complete.\n")
 
+## 4.3. Combine polygons and buffers into a single df --------------------------
 
+cat("\nCombining polygons and buffers into single dataset...\n")
+
+# Select relevant columns and ensure they match
+# species_list is retained as a list-column for use in H2b, H2c, H2d
+polygon_data <- development_with_counts |>
+  select(polygon_id, pair_id, polygon_type, area_m2_numeric,
+         english_categories, kommune, land_cover_name,
+         n_occurrences, n_species, species_list)
+
+buffer_data <- buffers_with_counts |>
+  select(polygon_id, pair_id, polygon_type, area_m2_numeric,
+         english_categories, kommune, land_cover_name,
+         n_occurrences, n_species, species_list)
+
+# Combine
+model_data <- bind_rows(polygon_data, buffer_data)
+
+# Convert to factors and create log area
+model_data <- model_data |>
+  mutate(polygon_type    = factor(polygon_type, levels = c("Buffer", "Development")),
+         land_cover_name = factor(land_cover_name),
+         kommune_factor  = factor(kommune),
+         pair_id_factor  = factor(pair_id),
+         log_area        = log(area_m2_numeric))
+
+# Remove any rows with missing data in modelling variables
+# Note: species_list may be an empty list for zero-occurrence polygons - this is fine
+model_data_complete <- model_data |>
+  filter(!is.na(n_occurrences),
+         !is.na(log_area),
+         !is.na(polygon_type),
+         !is.na(land_cover_name),
+         !is.na(kommune_factor))
+
+cat("Final dataset size:", nrow(model_data_complete), "rows\n")
+cat("Number of pairs:", n_distinct(model_data_complete$pair_id), "\n")
+cat("Number of municipalities:", n_distinct(model_data_complete$kommune_factor), "\n")
+
+# Save the full dataset - contains everything needed for H2a, H2b, H2c and H2d:
+saveRDS(model_data_complete,
+        here("data", "derived_data", "h2_polygon_buffer_data.rds"))
+
+cat("Dataset saved to data/derived_data/h2_polygon_buffer_data.rds\n")
