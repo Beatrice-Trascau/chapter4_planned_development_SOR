@@ -92,10 +92,49 @@ land_cover <- land_cover |>
 land_cover_terrestrial <- land_cover |>
   filter(ecotype %in% 1:6)
 
+## 3.2. Extract dominant land-cover for polygons and buffers -------------------
+
+# Create a function to extract the dominant (>50%) land-cover for each set of polygons
+extract_dominant_landcover <- function(polygons, land_cover_data){
+  
+  # intersect polygons with land-cover
+  intersection <- st_intersection(polygons, land_cover_data)
+  
+  # calculate area of each intersection
+  intersection <- intersection |>
+    mutate(intersection_area = as.numeric(st_area(geometry)))
+  
+  # find the land-cover type with the largest area for each polygon
+  dominant_lc <- intersection |>
+    st_drop_geometry() |>
+    group_by(polygon_id) |>
+    slice_max(intersection_area, n = 1, with_ties = FALSE) |>
+    select(polygon_id, land_cover_name, ecotype) |>
+    ungroup()
+  
+  return(dominant_lc)
+}
+
+# Extract land-cover for the development polygons
+polygon_landcover <- extract_dominant_landcover(development_polygons_filtered, 
+                                                land_cover_terrestrial)
+
+# Extract land-cover for the buffers
+buffer_landcover <- extract_dominant_landcover(polygon_buffers, 
+                                               land_cover_terrestrial)
+
+# Join land-cover back to polygons and buffers
+development_polygons_filtered <- development_polygons_filtered |>
+  left_join(polygon_landcover, by = "polygon_id")
+polygon_buffers <- polygon_buffers |>
+  left_join(buffer_landcover, by = "polygon_id")
 
 
-
-
+# Check if there are any polygons without land-cover data
+cat("Polygons without land cover:", 
+    sum(is.na(development_polygons_filtered$land_cover_name)), "\n")
+cat("Buffers without land cover:", 
+    sum(is.na(polygon_buffers$land_cover_name)), "\n")
 
 
 
