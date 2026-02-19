@@ -81,6 +81,14 @@ redlist_harmonised <- redlist_clean |>
 cat("\nMatch type breakdown:\n")
 print(table(redlist_harmonised$match_type))
 
+# Check the records with no matches
+redlist_no_match <- redlist_harmonised |>
+  filter(match_type == "NONE") # manual check suggests most of the names are accepted in GBIF, keep most as they are
+
+# Check the records with fuzzy matches
+redlizy_fuzzy <- redlist_harmonised |>
+  filter(match_type == "FUZZY")
+
 # Keep only exact matches and remove duplicate GBIF species
 redlist_harmonised <- redlist_harmonised |>
   filter(match_type == "EXACT") |>
