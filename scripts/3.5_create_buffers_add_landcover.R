@@ -1,6 +1,6 @@
 ##----------------------------------------------------------------------------##
 # PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
-# 4.1_H2a_buffer_landcover_GLMM
+# 4.1_create_buffer_landcover_GLMM
 # This script contains code to test Hypothesis 2a: Area plan polygons have a 
 # greater number of SOR than areas not planned for development
 ##----------------------------------------------------------------------------##
@@ -102,7 +102,7 @@ extract_dominant_landcover <- function(polygons, land_cover_data){
   
   # calculate area of each intersection
   intersection <- intersection |>
-    mutate(intersection_area = as.numeric(st_area(geometry)))
+    mutate(intersection_area = as.numeric(st_area(intersection)))
   
   # find the land-cover type with the largest area for each polygon
   dominant_lc <- intersection |>
@@ -210,6 +210,23 @@ buffer_data <- buffers_with_counts |>
 
 # Combine
 model_data <- bind_rows(polygon_data, buffer_data)
+
+# Remove orphaned buffers (buffers without matching development polygons)
+# This occurs when development polygons have no terrestrial land cover
+cat("\nChecking for orphaned buffers...\n")
+dev_ids <- polygon_data$polygon_id
+buf_ids <- buffer_data$polygon_id
+orphaned_buffers <- setdiff(buf_ids, dev_ids)
+
+if (length(orphaned_buffers) > 0) {
+  cat("  Found", length(orphaned_buffers), "orphaned buffers (no matching development polygon)\n")
+  cat("  Removing orphaned buffers to ensure proper pairing...\n")
+  model_data <- model_data |>
+    filter(polygon_id %in% dev_ids)
+  cat("  Orphaned buffers removed.\n")
+} else {
+  cat("  No orphaned buffers found - all pairs properly matched.\n")
+}
 
 # Convert to factors and create log area
 model_data <- model_data |>
