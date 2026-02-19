@@ -82,12 +82,60 @@ alien_harmonised <- alien_clean |>
 cat("\nMatch type breakdown:\n")
 print(table(alien_harmonised$match_type))
 
+## 2.3. Fix fuzzy and higher rank matches --------------------------------------
+
+# Get the species that had a fuzzy match
+fuzzy_aliens <- alien_harmonised |>
+  filter(match_type == "FUZZY")
+# manual check revealed all fuzzy matches should be accepted except for scientific_name = Chinemys reevesi
+
+# Get the species that had a higherrank match
+higherrank_aliens <- alien_harmonised |>
+  filter(match_type == "HIGHERRANK")
+
+# Get the species without any matches
+none_aliens <- alien_harmonised |>
+  filter(match_type == "NONE")
+
 # Keep only exact matches and remove duplicate GBIF species for preliminary analysis
-alien_harmonised <- alien_harmonised |>
-  filter(match_type == "EXACT") |>
+alien_cleaned <- alien_harmonised |>
+  filter(match_type %in% c("EXACT", "FUZZY", "HIGHERRANK"),
+         scientific_name != c("Charybdis (Goniohellenus) longicollis subsp. longicollis",
+                              "Chinemys reevesi", "Cotoneaster pyrenaicus",
+                              "Heracleum ’Kungsholm’", "Onchocleidus sp.",
+                              "Psyllipsocus (Psyllipsocus s.str.) ramburii",
+                              "Rubus fruticosus agg. 'Thornless Evergreen'",
+                              "Salix ×pentandroides")) |>
+  mutate(gbif_species = case_when(scientific_name == "Amelanchier spicata" ~ "Amelanchier humilis",
+                                  scientific_name == "Anemone narcissiflora" ~ "Anemonastrum narcissiflorum",
+                                  scientific_name == "Aristolochia macrophylla" ~ "Isotrema macrophyllum",
+                                  scientific_name == "Cleome spinosa" ~ "Tarenaya spinosa",
+                                  scientific_name == "Daucus carota subsp. sativus" ~ "Daucus carota",
+                                  scientific_name == "Elodea canadensis" ~ "Elodea canadensis",
+                                  scientific_name == "Erica herbacea" ~ "Erica carnea",
+                                  scientific_name == "Festuca rubra subsp. commutata" ~ "Festuca nigrescens",
+                                  scientific_name == "Herdmania momus subsp. momus" ~ "Herdmania momus",
+                                  scientific_name == "Iris latifolia" ~ "Iris jacquinii",
+                                  scientific_name == "Leontodon saxatilis" ~ "Thrincia saxatilis",
+                                  scientific_name == "Lotus glaber" ~ "Lotus tenuis",
+                                  scientific_name == "Lycopersicon esculentum" ~ "Solanum lycopersicum",
+                                  scientific_name == "Medicago glomerata" ~ "Medicago sativa",
+                                  scientific_name == "Myrica pensylvanica" ~ "Morella pensylvanica",
+                                  scientific_name == "Oenothera lamarckiana" ~ "Oenothera grandiflora",
+                                  scientific_name == "Physalis ixocarpa" ~ "Physalis philadelphica",
+                                  scientific_name == "Populus balsamifera 'Elongata'" ~ "Populus trichocarpa",
+                                  scientific_name == "Populus balsamifera 'Hortensis'" ~ "Populus balsamifera",
+                                  scientific_name == "Populus balsamifera 'Tristis''" ~ "Populus balsamifera",
+                                  scientific_name == "Pyrus communis subsp. pyraster" ~ "Pyrus pyraster",
+                                  scientific_name == "Rubus glandulosus" ~ "Rubus hirtus",
+                                  scientific_name == "Sanguisorba canadensis subsp. canadensis" ~ "Sanguisorba canadensis",
+                                  scientific_name == "Silene multifida" ~ "Silene macrophylla",
+                                  scientific_name == "Vulpia ciliata" ~ "Festuca ambigua",
+                                  scientific_name == "Vulpia myuros" ~ "Festuca myuros",
+                                  TRUE ~ gbif_species)) |>
   distinct(gbif_species, .keep_all = TRUE)
 
-cat("\nUsing", nrow(alien_harmonised), "alien species with exact GBIF matches.\n")
+cat("\nUsing", nrow(alien_cleaned), "alien species with exact GBIF matches.\n")
 
 # 3. PREPARE OCCURRENCE DATA ---------------------------------------------------
 
@@ -101,7 +149,7 @@ polygon_tax_join <- polygon_occurrence_join |>
 
 # Join alien status and risk categories to occurrences by species name
 polygon_alien_join <- polygon_tax_join |>
-  left_join(alien_harmonised |> select(gbif_species, risk_category),
+  left_join(alien_cleaned |> select(gbif_species, risk_category),
             by = c("species" = "gbif_species")) |>
   # Create simple alien/non-alien classification
   mutate(alien_status  = ifelse(is.na(risk_category), "Native", "Alien"),
@@ -142,7 +190,7 @@ species_per_polygon <- polygon_all_data |>
   tidyr::unnest(cols = species_list) |>
   rename(species = species_list) |>
   distinct(english_categories, species) |>
-  left_join(alien_harmonised |> select(gbif_species, risk_category),
+  left_join(alien_cleaned |> select(gbif_species, risk_category),
             by = c("species" = "gbif_species")) |>
   mutate(alien_status  = ifelse(is.na(risk_category), "Native", "Alien"),
          risk_category = ifelse(is.na(risk_category), "Native", risk_category))
