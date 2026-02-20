@@ -1,6 +1,6 @@
 ##----------------------------------------------------------------------------##
 # PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
-# 4.1_create_buffer_landcover_GLMM
+# 3.5_create_buffers_add_landcover
 # This script contains code to test Hypothesis 2a: Area plan polygons have a 
 # greater number of SOR than areas not planned for development
 ##----------------------------------------------------------------------------##
