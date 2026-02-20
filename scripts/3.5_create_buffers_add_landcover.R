@@ -254,3 +254,249 @@ saveRDS(model_data_complete,
         here("data", "derived_data", "h2_polygon_buffer_data.rds"))
 
 cat("Dataset saved to data/derived_data/h2_polygon_buffer_data.rds\n")
+
+# 5. CHECK DATA WAS COMBINED CORRECTLY -----------------------------------------
+
+## 5.1. Check basic structure --------------------------------------------------
+
+# Check dimensions
+nrow(model_data)
+ncol(model_data)
+colnames(model_data)
+
+# Break down by polygon type
+print(table(model_data$polygon_type))
+
+# Check how many development/buffer polygons there are
+if (n_dev == n_buf) {
+  cat("PASS: Equal Development and Buffer rows (", n_dev, "each)\n")
+  has_pairing_issue <- FALSE
+} else {
+  cat("FAIL: Unequal rows - Development:", n_dev, ", Buffer:", n_buf, "\n")
+  has_pairing_issue <- TRUE
+}
+
+## 5.2. Check pairing of development polygons and buffers ----------------------
+
+# Check how many pairs there are
+pair_counts <- model_data |>
+  group_by(pair_id) |>
+  summarise(n_rows = n(),
+            n_dev = sum(polygon_type == "Development"),
+            n_buf = sum(polygon_type == "Buffer"),
+            .groups = "drop")
+
+# Check if all pair_ids have 2 rows
+f (all(pair_counts$n_rows == 2)) {
+  cat("PASS: All pair_ids have exactly 2 rows\n")
+} else {
+  bad_pairs <- pair_counts |> filter(n_rows != 2)
+  cat("FAIL:", nrow(bad_pairs), "pair_ids don't have 2 rows\n")
+}
+
+# Check if all pair_ids have 1 buffer + 1 development polygon
+if (all(pair_counts$n_dev == 1 & pair_counts$n_buf == 1)) {
+  cat("PASS: All pairs have 1 Development + 1 Buffer\n")
+} else {
+  bad_pairs <- pair_counts |> filter(n_dev != 1 | n_buf != 1)
+  cat("FAIL:", nrow(bad_pairs), "pairs don't have correct composition\n")
+}
+
+# Check polygon_id matching
+dev_ids <- model_data |> filter(polygon_type == "Development") |> pull(polygon_id) |> sort()
+buf_ids <- model_data |> filter(polygon_type == "Buffer") |> pull(polygon_id) |> sort()
+
+if (identical(dev_ids, buf_ids)) {
+  cat("PASS: Development and Buffer have matching polygon_id sets\n")
+  orphaned_buffer_ids <- integer(0)
+} else {
+  orphaned_buffer_ids <- setdiff(buf_ids, dev_ids)
+  cat("FAIL:", length(orphaned_buffer_ids), "orphaned buffers (in Buffer but not Development)\n")
+}
+
+## 5.3. Check data integrity ---------------------------------------------------
+
+# Define a list of key columns
+critical_cols <- c("polygon_id", "pair_id", "polygon_type", "area_m2_numeric",
+                   "kommune", "n_occurrences", "n_species", "log_area")
+
+# Run through columns and check for missing values
+all_clean <- TRUE
+for (col in critical_cols) {
+  n_missing <- sum(is.na(model_data[[col]]))
+  if (n_missing == 0) {
+    cat("  ✓", col, "\n")
+  } else {
+    cat("  ✗", col, ":", n_missing, "missing\n")
+    all_clean <- FALSE
+  }
+}
+
+# Check which values are missing
+n_missing_lc <- sum(is.na(model_data$land_cover_name))
+
+## 5.4. Check orphaned buffers -------------------------------------------------
+
+# Check the buffers that do not have any development polygons associated with them
+if (has_pairing_issue && length(orphaned_buffer_ids) > 0) {
+  
+ # extract buffers without development polygons
+  orphaned_buffers <- model_data |>
+    filter(polygon_type == "Buffer", polygon_id %in% orphaned_buffer_ids)
+  
+  # check if orphaned buffers have NA for land-cover
+  cat("  Land-cover (non-NA):", sum(!is.na(orphaned_buffers$land_cover_name)), 
+      "out of", nrow(orphaned_buffers), "\n")
+  
+  # extract the land-cover of orphaned buffers
+  if (sum(!is.na(orphaned_buffers$land_cover_name)) > 0) {
+    cat("\n  Land-cover types:\n")
+    lc_table <- table(orphaned_buffers$land_cover_name)
+    for (i in seq_along(lc_table)) {
+      cat("    ", names(lc_table)[i], ":", lc_table[i], "\n")
+    }
+  }
+  
+  # load original polygons to check
+  development_polygons <- st_read(here("data", "raw_data", "nina_planagt.gpkg"),
+                                  quiet = TRUE)
+  
+  # filter out marine land-cover categories
+  development_polygons_filtered <- development_polygons |>
+    filter(arealformalsgruppe != "16 Havner og småbåthavner") |>
+    mutate(polygon_id = row_number())
+  
+  # filter out polygons that do are not in the orphaned polygons list
+  missing_dev_polygons <- development_polygons_filtered |>
+    filter(polygon_id %in% orphaned_buffer_ids)
+  
+  # extract land cover for missing polygons using ALL categories
+  gdb_path <- here("data", "raw_data", "Hovedokosystem_nedlasting", "Hovedokosystem.gdb")
+  land_cover_all <- st_read(gdb_path, layer = "Hovedøkosystem", quiet = TRUE)
+  
+  # check if CRS is the same
+  if (st_crs(land_cover_all)$epsg != 25833) {
+    land_cover_all <- st_transform(land_cover_all, 25833)
+  }
+  
+  # rename land-cover categories
+  land_cover_all <- land_cover_all |>
+    mutate(land_cover_category = case_when(ecotype %in% 1:6 ~ "Terrestrial",
+                                           ecotype == 7 ~ "Wetlands",
+                                           ecotype == 8 ~ "Rivers",
+                                           ecotype == 9 ~ "Lakes",
+                                           ecotype %in% 10:12 ~ "Marine",
+                                           TRUE ~ "Unknown"))
+  
+  # add detailed land cover names
+  land_cover_all <- land_cover_all |>
+    mutate(land_cover_name_detailed = case_when(ecotype == 1 ~ "1_Settlements",
+                                                ecotype == 2 ~ "2_Cropland",
+                                                ecotype == 3 ~ "3_Grassland",
+                                                ecotype == 4 ~ "4_Forest",
+                                                ecotype == 5 ~ "5_Heathland",
+                                                ecotype == 6 ~ "6_Sparsely_vegetated",
+                                                ecotype == 7 ~ "7_Wetlands",
+                                                ecotype == 8 ~ "8_Rivers",
+                                                ecotype == 9 ~ "9_Lakes",
+                                                ecotype == 10 ~ "10_Marine_inlets",
+                                                ecotype == 11 ~ "11_Coastal",
+                                                ecotype == 12 ~ "12_Marine_offshore",
+                                                TRUE ~ "Unknown"))
+  
+  # extract dominant land cover
+  extract_dominant_landcover <- function(polygons, land_cover_data) {
+    intersection <- st_intersection(polygons, land_cover_data)
+    if (nrow(intersection) == 0) {
+      return(data.frame(polygon_id = integer(), ecotype = integer(), 
+                        land_cover_category = character(),
+                        land_cover_name_detailed = character()))
+    }
+    intersection |>
+      mutate(intersection_area = as.numeric(st_area(intersection))) |>
+      st_drop_geometry() |>
+      group_by(polygon_id) |>
+      slice_max(intersection_area, n = 1, with_ties = FALSE) |>
+      select(polygon_id, ecotype, land_cover_category, land_cover_name_detailed) |>
+      ungroup()
+  }
+  
+  tryCatch({
+    missing_lc <- extract_dominant_landcover(missing_dev_polygons, land_cover_all)
+    
+    cat("RESULTS:\n")
+    cat("  Extracted land cover for:", nrow(missing_lc), "out of", 
+        nrow(missing_dev_polygons), "polygons\n\n")
+    
+    if (nrow(missing_lc) > 0) {
+      # detailed breakdown by specific ecotype
+      cat("  Detailed land cover breakdown (by ecotype):\n")
+      detailed_table <- table(missing_lc$land_cover_name_detailed)
+      for (i in seq_along(detailed_table)) {
+        pct <- round(100 * detailed_table[i] / sum(detailed_table), 1)
+        cat("    ", names(detailed_table)[i], ":", detailed_table[i], 
+            "(", pct, "%)\n")
+      }
+      
+      # broad category breakdown
+      cat("\n  Broad category breakdown:\n")
+      lc_breakdown <- table(missing_lc$land_cover_category)
+      for (i in seq_along(lc_breakdown)) {
+        pct <- round(100 * lc_breakdown[i] / sum(lc_breakdown), 1)
+        cat("    ", names(lc_breakdown)[i], ":", lc_breakdown[i], 
+            "(", pct, "%)\n")
+      }
+      
+      # count by specific type
+      terrestrial_count <- sum(missing_lc$ecotype %in% 1:6)
+      wetlands_count <- sum(missing_lc$ecotype == 7)
+      rivers_count <- sum(missing_lc$ecotype == 8)
+      lakes_count <- sum(missing_lc$ecotype == 9)
+      marine_count <- sum(missing_lc$ecotype %in% 10:12)
+      
+      cat("\n  Summary by type:\n")
+      cat("    Terrestrial (1-6):", terrestrial_count, "(", 
+          round(100 * terrestrial_count / nrow(missing_lc), 1), "%)\n")
+      cat("    Wetlands (7):", wetlands_count, "(", 
+          round(100 * wetlands_count / nrow(missing_lc), 1), "%)\n")
+      cat("    Rivers (8):", rivers_count, "(", 
+          round(100 * rivers_count / nrow(missing_lc), 1), "%)\n")
+      cat("    Lakes (9):", lakes_count, "(", 
+          round(100 * lakes_count / nrow(missing_lc), 1), "%)\n")
+      cat("    Marine (10-12):", marine_count, "(", 
+          round(100 * marine_count / nrow(missing_lc), 1), "%)\n")
+      
+      cat("\n")
+      if (terrestrial_count == 0) {
+        cat("✓ DIAGNOSIS CONFIRMED:\n")
+        cat("  All", nrow(missing_lc), "missing development polygons have\n")
+        cat("  NO terrestrial land cover (ecotypes 1-6).\n")
+        cat("  They contain only:\n")
+        if (wetlands_count > 0) cat("    • Wetlands:", wetlands_count, "\n")
+        if (rivers_count > 0) cat("    • Rivers:", rivers_count, "\n")
+        if (lakes_count > 0) cat("    • Lakes:", lakes_count, "\n")
+        if (marine_count > 0) cat("    • Marine/coastal:", marine_count, "\n")
+        cat("\n  Their buffers extended into terrestrial areas → orphaned buffers.\n\n")
+        cat("  RECOMMENDATION: Safe to remove orphaned buffers.\n")
+        cat("                  Run fix_orphaned_buffers.R\n")
+      } else {
+        cat("⚠ WARNING:\n")
+        cat("  ", terrestrial_count, "polygons have terrestrial land cover\n")
+        cat("  but are missing. Further investigation needed.\n")
+      }
+      
+      # Save detailed results
+      saveRDS(missing_lc,
+              here("data", "derived_data", "missing_polygons_landcover_diagnosis.rds"))
+      cat("\nDetailed results saved to:\n")
+      cat("  data/derived_data/missing_polygons_landcover_diagnosis.rds\n")
+    }
+  }, error = function(e) {
+    cat("  Error during extraction:", e$message, "\n")
+  })
+  
+} else {
+  
+}
+
+# END OF SCRIPT ----------------------------------------------------------------
