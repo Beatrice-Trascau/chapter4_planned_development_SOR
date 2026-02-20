@@ -89,6 +89,10 @@ redlist_no_match <- redlist_harmonised |>
 redlizy_fuzzy <- redlist_harmonised |>
   filter(match_type == "FUZZY")
 
+# Check the records with higherrank matches
+redlist_higherrank <- redlist_harmonised |>
+  filter(match_type == "HIGHERRANK")
+
 # Keep only exact matches and remove duplicate GBIF species
 redlist_harmonised <- redlist_harmonised |>
   filter(match_type == "EXACT") |>
