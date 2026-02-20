@@ -21,7 +21,7 @@ install_load_package <- function(x) {
 package_vec <- c("here", "sf", "dplyr", "ggplot2", "viridis", "ggspatial",
                  "scales", "terra", "geodata", "CoordinateCleaner", "cowplot",
                  "stringr", "tidyr", "tidyterra", "readxl", "rgbif", "glmmTMB",
-                 "DHARMa", "emmeans", "ggeffects", "broom.mixed", "bbmle")
+                 "DHARMa", "emmeans", "ggeffects", "broom.mixed", "bbmle", "lme4")
 
 # Execute the function
 sapply(package_vec, install_load_package)
