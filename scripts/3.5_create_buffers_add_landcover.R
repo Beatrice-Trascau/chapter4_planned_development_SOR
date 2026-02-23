@@ -44,15 +44,232 @@ development_polygons_filtered <- development_polygons |>
 
 ## 2.2. Create buffers ---------------------------------------------------------
 
-# Calculate buffer distance for each polygon based on its area
-  # buffer distance  = radius of circle with same areas as the polygon
-  # radius = sqrt(area/pi)
-development_polygons_filtered <- development_polygons_filtered |>
-  mutate(buffer_distance = sqrt(area_m2_numeric / pi))
+# Function to find buffer distance that achieves target area (2x original)
+  # returns both geometry and diagnostic information
+find_buffer_distance_for_target_area <- function(geom, original_area, 
+                                                 target_multiplier = 2,
+                                                 tolerance = 0.001,
+                                                 max_iterations = 20) {
+  
+  # initial guess based on area/perimeter approximation
+  perimeter <- as.numeric(st_length(st_cast(st_geometry(geom), "MULTILINESTRING")))
+  
+  # for 2x area, we want buffer area = original area
+  # initial guess: dist = original_area / perimeter
+  dist_guess <- original_area / perimeter
+  
+  # target area
+  target_area <- original_area * target_multiplier
+  
+  # track iterations
+  iteration_count <- 0
+  
+  # iteratively adjust buffer distance to hit target area
+  for(i in 1:max_iterations) {
+    iteration_count <- i
+    
+    # create buffered polygon
+    buffered <- st_buffer(geom, dist = dist_guess)
+    current_area <- as.numeric(st_area(buffered))
+    
+    # check if we're close enough
+    ratio <- current_area / target_area
+    
+    if(abs(ratio - 1) < tolerance) {
+      # Success! Close enough to target
+      break
+    }
+    
+    # adjust distance proportionally
+    # using square root because area scales with distance^2
+    dist_guess <- dist_guess * sqrt(target_area / current_area)
+  }
+  
+  # return the final buffered geometry AND diagnostic information
+  buffered_final <- st_buffer(geom, dist = dist_guess)
+  final_area <- as.numeric(st_area(buffered_final))
+  
+  return(list(
+    buffered = buffered_final,
+    iterations = iteration_count,
+    buffer_distance = dist_guess,
+    buffered_area = final_area,
+    target_area = target_area,
+    area_ratio = final_area / target_area
+  ))
+}
 
-# Create buffers
-polygon_buffers <- st_buffer(development_polygons_filtered, 
-                             dist = development_polygons_filtered$buffer_distance)
+# Create buffers for all development polygons
+polygon_buffers <- development_polygons_filtered
+
+# Initialize vectors to store diagnostic information
+buffer_diagnostics <- data.frame(polygon_id = development_polygons_filtered$polygon_id,
+                                 iterations = integer(nrow(development_polygons_filtered)),
+                                 buffer_distance_m = numeric(nrow(development_polygons_filtered)),
+                                 buffered_area_m2 = numeric(nrow(development_polygons_filtered)),
+                                 target_area_m2 = numeric(nrow(development_polygons_filtered)),
+                                 buffered_area_ratio = numeric(nrow(development_polygons_filtered)),
+                                 buffer_zone_area_m2 = numeric(nrow(development_polygons_filtered)),
+                                 buffer_zone_ratio = numeric(nrow(development_polygons_filtered)))
+
+# Progress tracking variables
+start_time <- Sys.time()
+progress_interval <- 10000
+
+for(i in 1:nrow(polygon_buffers)) {
+  # find optimal buffer distance and create buffered polygon
+  result <- find_buffer_distance_for_target_area(st_geometry(development_polygons_filtered)[i],
+                                                 development_polygons_filtered$area_m2_numeric[i],
+                                                 target_multiplier = 2,
+                                                 tolerance = 0.001,
+                                                 max_iterations = 20)
+  
+  # subtract original to get buffer "donut"
+  buffer_geom <- st_difference(result$buffered,
+                               st_geometry(development_polygons_filtered)[i])
+  st_geometry(polygon_buffers)[i] <- buffer_geom
+  
+  # store diagnostic information
+  buffer_diagnostics$iterations[i] <- result$iterations
+  buffer_diagnostics$buffer_distance_m[i] <- result$buffer_distance
+  buffer_diagnostics$buffered_area_m2[i] <- result$buffered_area
+  buffer_diagnostics$target_area_m2[i] <- result$target_area
+  buffer_diagnostics$buffered_area_ratio[i] <- result$area_ratio
+  buffer_diagnostics$buffer_zone_area_m2[i] <- as.numeric(st_area(buffer_geom))
+  buffer_diagnostics$buffer_zone_ratio[i] <- as.numeric(st_area(buffer_geom)) / 
+    development_polygons_filtered$area_m2_numeric[i]
+  
+  # progress indicator
+  if(i %% progress_interval == 0) {
+    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+    rate <- i / elapsed
+    remaining <- (nrow(polygon_buffers) - i) / rate
+    cat("  Processed", i, "of", nrow(polygon_buffers), "polygons")
+    cat(" | Elapsed:", round(elapsed, 1), "min")
+    cat(" | Est. remaining:", round(remaining, 1), "min\n")
+  }
+}
+
+# Get the total time
+total_time <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+cat("\nBuffer creation complete! Total time:", round(total_time, 1), "minutes\n")
+
+# Save diagnostic information
+saveRDS(buffer_diagnostics, 
+        here("data", "derived_data", "buffer_creation_diagnostics.rds"))
+
+# Verify the buffer areas
+cat("\nBuffered polygon accuracy (target = 2.0x original):\n")
+cat("  Mean buffered/target ratio:", round(mean(buffer_diagnostics$buffered_area_ratio, na.rm = TRUE), 4), "\n")
+cat("  Median:", round(median(buffer_diagnostics$buffered_area_ratio, na.rm = TRUE), 4), "\n")
+cat("  Std Dev:", round(sd(buffer_diagnostics$buffered_area_ratio, na.rm = TRUE), 6), "\n")
+cat("  Range:", round(min(buffer_diagnostics$buffered_area_ratio, na.rm = TRUE), 6), "to", 
+    round(max(buffer_diagnostics$buffered_area_ratio, na.rm = TRUE), 6), "\n")
+
+cat("\nBuffer zone accuracy (target = 1.0x original):\n")
+cat("  Mean buffer/original ratio:", round(mean(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 4), "\n")
+cat("  Median:", round(median(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 4), "\n")
+cat("  Std Dev:", round(sd(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 4), "\n")
+cat("  Range:", round(min(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 4), "to", 
+    round(max(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 4), "\n")
+
+cat("\nIterations:\n")
+cat("  Mean iterations per polygon:", round(mean(buffer_diagnostics$iterations, na.rm = TRUE), 1), "\n")
+cat("  Median:", median(buffer_diagnostics$iterations, na.rm = TRUE), "\n")
+cat("  Range:", min(buffer_diagnostics$iterations, na.rm = TRUE), "to", 
+    max(buffer_diagnostics$iterations, na.rm = TRUE), "\n")
+
+# Check for problematic ratios
+problematic_1pct <- abs(buffer_diagnostics$buffer_zone_ratio - 1) > 0.01
+problematic_5pct <- abs(buffer_diagnostics$buffer_zone_ratio - 1) > 0.05
+
+cat("\nQuality assessment:\n")
+cat("  Polygons within 1% of target:", sum(!problematic_1pct, na.rm = TRUE), 
+    "(", round(100 * mean(!problematic_1pct, na.rm = TRUE), 1), "%)\n")
+cat("  Polygons within 5% of target:", sum(!problematic_5pct, na.rm = TRUE), 
+    "(", round(100 * mean(!problematic_5pct, na.rm = TRUE), 1), "%)\n")
+
+if(sum(problematic_5pct, na.rm = TRUE) > 0) {
+  cat("  Warning:", sum(problematic_5pct, na.rm = TRUE), 
+      "polygons have buffer/original ratio >5% off from 1.0\n")
+  cat("  (", round(100 * mean(problematic_5pct, na.rm = TRUE), 2), "% of total)\n")
+  
+  # Save list of problematic polygons
+  problematic_ids <- buffer_diagnostics$polygon_id[problematic_5pct]
+  saveRDS(problematic_ids, 
+          here("data", "derived_data", "problematic_buffer_ids.rds"))
+  cat("  List of problematic polygon IDs saved to: data/derived_data/problematic_buffer_ids.rds\n")
+} else {
+  cat("  ✓ All buffer areas within 5% of original areas\n")
+}
+
+# Create summary plot of buffer accuracy
+png(filename = here("figures", "FigureS_buffer_creation_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+
+par(mfrow = c(2, 3))
+
+# Plot 1: Buffer zone ratio histogram
+hist(buffer_diagnostics$buffer_zone_ratio, 
+     breaks = 50,
+     main = "Buffer Zone Area Ratio Distribution",
+     xlab = "Buffer area / Original area",
+     col = "steelblue",
+     border = "white")
+abline(v = 1, col = "red", lwd = 2, lty = 2)
+
+# Plot 2: Iterations histogram
+hist(buffer_diagnostics$iterations,
+     breaks = max(buffer_diagnostics$iterations) - min(buffer_diagnostics$iterations) + 1,
+     main = "Iterations Required",
+     xlab = "Number of iterations",
+     col = "steelblue",
+     border = "white")
+
+# Plot 3: Buffer distance vs polygon area
+plot(development_polygons_filtered$area_m2_numeric, 
+     buffer_diagnostics$buffer_distance_m,
+     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.3),
+     main = "Buffer Distance vs Polygon Area",
+     xlab = "Polygon area (m²)",
+     ylab = "Buffer distance (m)",
+     log = "xy")
+
+# Plot 4: Buffer zone ratio vs polygon area
+plot(development_polygons_filtered$area_m2_numeric, 
+     buffer_diagnostics$buffer_zone_ratio,
+     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.3),
+     main = "Buffer Accuracy vs Polygon Area",
+     xlab = "Polygon area (m²)",
+     ylab = "Buffer area / Original area",
+     log = "x")
+abline(h = 1, col = "red", lwd = 2, lty = 2)
+abline(h = c(0.95, 1.05), col = "orange", lwd = 1, lty = 2)
+
+# Plot 5: Buffered area ratio
+hist(buffer_diagnostics$buffered_area_ratio, 
+     breaks = 50,
+     main = "Buffered Polygon Accuracy",
+     xlab = "Buffered area / Target area (2x)",
+     col = "steelblue",
+     border = "white")
+abline(v = 1, col = "red", lwd = 2, lty = 2)
+
+# Plot 6: Iterations vs polygon area
+plot(development_polygons_filtered$area_m2_numeric, 
+     buffer_diagnostics$iterations,
+     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.3),
+     main = "Iterations vs Polygon Area",
+     xlab = "Polygon area (m²)",
+     ylab = "Iterations required",
+     log = "x")
+
+par(mfrow = c(1, 1))
+dev.off()
+
+cat("\nDiagnostic figure saved to: figures/FigureS_buffer_creation_diagnostics.png\n")
+
+cat("\nBuffer creation and verification complete!\n\n")
 
 # Add identifier columns to distinguish polygons from buffers
 development_polygons_filtered$polygon_type <- "Development"
@@ -90,7 +307,7 @@ land_cover <- land_cover |>
 
 # Keep only terrestrial land-covers (remove aquatic and marine)
 land_cover_terrestrial <- land_cover |>
-  filter(ecotype %in% 1:6)
+  filter(ecotype %in% 1:7)
 
 ## 3.2. Extract dominant land-cover for polygons and buffers -------------------
 
@@ -287,7 +504,7 @@ pair_counts <- model_data |>
             .groups = "drop")
 
 # Check if all pair_ids have 2 rows
-f (all(pair_counts$n_rows == 2)) {
+if (all(pair_counts$n_rows == 2)) {
   cat("PASS: All pair_ids have exactly 2 rows\n")
 } else {
   bad_pairs <- pair_counts |> filter(n_rows != 2)
