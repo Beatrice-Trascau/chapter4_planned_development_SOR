@@ -44,48 +44,69 @@ development_polygons_filtered <- development_polygons |>
 
 ## 2.2. Create buffers ---------------------------------------------------------
 
-# Function to find buffer distance that achieves target area (2x original)
-  # returns both geometry and diagnostic information
-find_buffer_distance_for_target_area <- function(geom, original_area, 
-                                                 target_multiplier = 2,
-                                                 tolerance = 0.001,
-                                                 max_iterations = 20) {
+cat("\n=== CREATING BUFFERS USING HYBRID APPROACH ===\n")
+cat("This uses a fast method first, then iterative refinement if needed\n")
+cat("Expected time: ~15-30 minutes for", nrow(development_polygons_filtered), "polygons\n\n")
+
+# Function to create buffer using fast method
+create_buffer_fast <- function(geom, original_area) {
+  # Quick approximation: buffer distance = radius of circle with same area
+  buffer_dist <- sqrt(original_area / pi)
   
-  # initial guess based on area/perimeter approximation
+  # Create buffered polygon (2x area target)
+  buffered <- st_buffer(geom, dist = buffer_dist)
+  
+  # Check accuracy
+  buffered_area <- as.numeric(st_area(buffered))
+  target_area <- original_area * 2
+  area_ratio <- buffered_area / target_area
+  
+  return(list(
+    buffered = buffered,
+    buffered_area = buffered_area,
+    target_area = target_area,
+    area_ratio = area_ratio,
+    buffer_distance = buffer_dist,
+    method = "fast"
+  ))
+}
+
+# Function to find buffer distance using iterative refinement
+find_buffer_distance_iterative <- function(geom, original_area, 
+                                           target_multiplier = 2,
+                                           tolerance = 0.01,  # Relaxed to 1% for speed
+                                           max_iterations = 20) {
+  
+  # Initial guess based on area/perimeter approximation
   perimeter <- as.numeric(st_length(st_cast(st_geometry(geom), "MULTILINESTRING")))
-  
-  # for 2x area, we want buffer area = original area
-  # initial guess: dist = original_area / perimeter
   dist_guess <- original_area / perimeter
   
-  # target area
+  # Target area
   target_area <- original_area * target_multiplier
   
-  # track iterations
+  # Track iterations
   iteration_count <- 0
   
-  # iteratively adjust buffer distance to hit target area
+  # Iteratively adjust buffer distance to hit target area
   for(i in 1:max_iterations) {
     iteration_count <- i
     
-    # create buffered polygon
+    # Create buffered polygon
     buffered <- st_buffer(geom, dist = dist_guess)
     current_area <- as.numeric(st_area(buffered))
     
-    # check if we're close enough
+    # Check if we're close enough
     ratio <- current_area / target_area
     
     if(abs(ratio - 1) < tolerance) {
-      # Success! Close enough to target
       break
     }
     
-    # adjust distance proportionally
-    # using square root because area scales with distance^2
+    # Adjust distance proportionally
     dist_guess <- dist_guess * sqrt(target_area / current_area)
   }
   
-  # return the final buffered geometry AND diagnostic information
+  # Return final result
   buffered_final <- st_buffer(geom, dist = dist_guess)
   final_area <- as.numeric(st_area(buffered_final))
   
@@ -95,41 +116,85 @@ find_buffer_distance_for_target_area <- function(geom, original_area,
     buffer_distance = dist_guess,
     buffered_area = final_area,
     target_area = target_area,
-    area_ratio = final_area / target_area
+    area_ratio = final_area / target_area,
+    method = "iterative"
   ))
 }
 
+# Hybrid function: try fast first, use iterative if needed
+create_buffer_hybrid <- function(geom, original_area, accuracy_threshold = 0.05) {
+  
+  # Try fast method first
+  fast_result <- create_buffer_fast(geom, original_area)
+  
+  # Check if accuracy is acceptable (within 5%)
+  if(abs(fast_result$area_ratio - 1) < accuracy_threshold) {
+    # Fast method is good enough!
+    return(list(
+      buffered = fast_result$buffered,
+      buffered_area = fast_result$buffered_area,
+      target_area = fast_result$target_area,
+      area_ratio = fast_result$area_ratio,
+      buffer_distance = fast_result$buffer_distance,
+      iterations = 0,  # No iterations needed
+      method = "fast"
+    ))
+  } else {
+    # Need iterative refinement
+    return(find_buffer_distance_iterative(geom, original_area))
+  }
+}
+
 # Create buffers for all development polygons
+cat("Step 1: Creating buffered polygons (2x area)...\n")
+
 polygon_buffers <- development_polygons_filtered
 
 # Initialize vectors to store diagnostic information
-buffer_diagnostics <- data.frame(polygon_id = development_polygons_filtered$polygon_id,
-                                 iterations = integer(nrow(development_polygons_filtered)),
-                                 buffer_distance_m = numeric(nrow(development_polygons_filtered)),
-                                 buffered_area_m2 = numeric(nrow(development_polygons_filtered)),
-                                 target_area_m2 = numeric(nrow(development_polygons_filtered)),
-                                 buffered_area_ratio = numeric(nrow(development_polygons_filtered)),
-                                 buffer_zone_area_m2 = numeric(nrow(development_polygons_filtered)),
-                                 buffer_zone_ratio = numeric(nrow(development_polygons_filtered)))
+buffer_diagnostics <- data.frame(
+  polygon_id = development_polygons_filtered$polygon_id,
+  method = character(nrow(development_polygons_filtered)),
+  iterations = integer(nrow(development_polygons_filtered)),
+  buffer_distance_m = numeric(nrow(development_polygons_filtered)),
+  buffered_area_m2 = numeric(nrow(development_polygons_filtered)),
+  target_area_m2 = numeric(nrow(development_polygons_filtered)),
+  buffered_area_ratio = numeric(nrow(development_polygons_filtered)),
+  buffer_zone_area_m2 = numeric(nrow(development_polygons_filtered)),
+  buffer_zone_ratio = numeric(nrow(development_polygons_filtered)),
+  stringsAsFactors = FALSE
+)
 
 # Progress tracking variables
 start_time <- Sys.time()
 progress_interval <- 10000
+n_fast <- 0
+n_iterative <- 0
 
 for(i in 1:nrow(polygon_buffers)) {
-  # find optimal buffer distance and create buffered polygon
-  result <- find_buffer_distance_for_target_area(st_geometry(development_polygons_filtered)[i],
-                                                 development_polygons_filtered$area_m2_numeric[i],
-                                                 target_multiplier = 2,
-                                                 tolerance = 0.001,
-                                                 max_iterations = 20)
+  # Create buffer using hybrid approach
+  result <- create_buffer_hybrid(
+    st_geometry(development_polygons_filtered)[i],
+    development_polygons_filtered$area_m2_numeric[i],
+    accuracy_threshold = 0.05  # 5% tolerance for fast method
+  )
   
-  # subtract original to get buffer "donut"
-  buffer_geom <- st_difference(result$buffered,
-                               st_geometry(development_polygons_filtered)[i])
+  # Track which method was used
+  if(result$method == "fast") {
+    n_fast <- n_fast + 1
+  } else {
+    n_iterative <- n_iterative + 1
+  }
+  
+  # Subtract original to get buffer "donut"
+  buffer_geom <- st_difference(
+    result$buffered,
+    st_geometry(development_polygons_filtered)[i]
+  )
+  
   st_geometry(polygon_buffers)[i] <- buffer_geom
   
-  # store diagnostic information
+  # Store diagnostic information
+  buffer_diagnostics$method[i] <- result$method
   buffer_diagnostics$iterations[i] <- result$iterations
   buffer_diagnostics$buffer_distance_m[i] <- result$buffer_distance
   buffer_diagnostics$buffered_area_m2[i] <- result$buffered_area
@@ -139,26 +204,35 @@ for(i in 1:nrow(polygon_buffers)) {
   buffer_diagnostics$buffer_zone_ratio[i] <- as.numeric(st_area(buffer_geom)) / 
     development_polygons_filtered$area_m2_numeric[i]
   
-  # progress indicator
+  # Progress indicator
   if(i %% progress_interval == 0) {
     elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
     rate <- i / elapsed
     remaining <- (nrow(polygon_buffers) - i) / rate
+    pct_fast <- round(100 * n_fast / i, 1)
     cat("  Processed", i, "of", nrow(polygon_buffers), "polygons")
     cat(" | Elapsed:", round(elapsed, 1), "min")
-    cat(" | Est. remaining:", round(remaining, 1), "min\n")
+    cat(" | Est. remaining:", round(remaining, 1), "min")
+    cat(" | Fast:", pct_fast, "%\n")
   }
 }
 
-# Get the total time
 total_time <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
 cat("\nBuffer creation complete! Total time:", round(total_time, 1), "minutes\n")
+
+# Report method usage
+cat("\nMethod usage:\n")
+cat("  Fast method:", n_fast, "(", round(100 * n_fast / nrow(polygon_buffers), 1), "%)\n")
+cat("  Iterative method:", n_iterative, "(", round(100 * n_iterative / nrow(polygon_buffers), 1), "%)\n")
 
 # Save diagnostic information
 saveRDS(buffer_diagnostics, 
         here("data", "derived_data", "buffer_creation_diagnostics.rds"))
+cat("\nBuffer diagnostics saved to: data/derived_data/buffer_creation_diagnostics.rds\n")
 
-# Verify the buffer areas
+# Verify buffer areas
+cat("\nStep 2: Verifying buffer areas...\n")
+
 cat("\nBuffered polygon accuracy (target = 2.0x original):\n")
 cat("  Mean buffered/target ratio:", round(mean(buffer_diagnostics$buffered_area_ratio, na.rm = TRUE), 4), "\n")
 cat("  Median:", round(median(buffer_diagnostics$buffered_area_ratio, na.rm = TRUE), 4), "\n")
@@ -173,11 +247,15 @@ cat("  Std Dev:", round(sd(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 
 cat("  Range:", round(min(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 4), "to", 
     round(max(buffer_diagnostics$buffer_zone_ratio, na.rm = TRUE), 4), "\n")
 
-cat("\nIterations:\n")
-cat("  Mean iterations per polygon:", round(mean(buffer_diagnostics$iterations, na.rm = TRUE), 1), "\n")
-cat("  Median:", median(buffer_diagnostics$iterations, na.rm = TRUE), "\n")
-cat("  Range:", min(buffer_diagnostics$iterations, na.rm = TRUE), "to", 
-    max(buffer_diagnostics$iterations, na.rm = TRUE), "\n")
+# Report iterations for iterative cases
+if(n_iterative > 0) {
+  iterative_cases <- buffer_diagnostics[buffer_diagnostics$method == "iterative", ]
+  cat("\nIterations (iterative cases only):\n")
+  cat("  Mean iterations:", round(mean(iterative_cases$iterations, na.rm = TRUE), 1), "\n")
+  cat("  Median:", median(iterative_cases$iterations, na.rm = TRUE), "\n")
+  cat("  Range:", min(iterative_cases$iterations, na.rm = TRUE), "to", 
+      max(iterative_cases$iterations, na.rm = TRUE), "\n")
+}
 
 # Check for problematic ratios
 problematic_1pct <- abs(buffer_diagnostics$buffer_zone_ratio - 1) > 0.01
@@ -218,27 +296,36 @@ hist(buffer_diagnostics$buffer_zone_ratio,
      border = "white")
 abline(v = 1, col = "red", lwd = 2, lty = 2)
 
-# Plot 2: Iterations histogram
-hist(buffer_diagnostics$iterations,
-     breaks = max(buffer_diagnostics$iterations) - min(buffer_diagnostics$iterations) + 1,
-     main = "Iterations Required",
-     xlab = "Number of iterations",
-     col = "steelblue",
-     border = "white")
+# Plot 2: Method usage
+method_table <- table(buffer_diagnostics$method)
+barplot(method_table,
+        main = "Method Usage",
+        xlab = "Method",
+        ylab = "Number of polygons",
+        col = c("lightgreen", "orange"),
+        names.arg = c("Fast", "Iterative"))
 
-# Plot 3: Buffer distance vs polygon area
+# Plot 3: Buffer distance vs polygon area (colored by method)
 plot(development_polygons_filtered$area_m2_numeric, 
      buffer_diagnostics$buffer_distance_m,
-     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.3),
+     pch = 16, cex = 0.3, 
+     col = ifelse(buffer_diagnostics$method == "fast", 
+                  rgb(0, 0.5, 0, 0.3), rgb(1, 0.5, 0, 0.3)),
      main = "Buffer Distance vs Polygon Area",
      xlab = "Polygon area (m²)",
      ylab = "Buffer distance (m)",
      log = "xy")
+legend("bottomright", 
+       legend = c("Fast", "Iterative"),
+       col = c(rgb(0, 0.5, 0, 0.5), rgb(1, 0.5, 0, 0.5)),
+       pch = 16, cex = 0.8)
 
 # Plot 4: Buffer zone ratio vs polygon area
 plot(development_polygons_filtered$area_m2_numeric, 
      buffer_diagnostics$buffer_zone_ratio,
-     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.3),
+     pch = 16, cex = 0.3, 
+     col = ifelse(buffer_diagnostics$method == "fast", 
+                  rgb(0, 0.5, 0, 0.3), rgb(1, 0.5, 0, 0.3)),
      main = "Buffer Accuracy vs Polygon Area",
      xlab = "Polygon area (m²)",
      ylab = "Buffer area / Original area",
@@ -255,14 +342,18 @@ hist(buffer_diagnostics$buffered_area_ratio,
      border = "white")
 abline(v = 1, col = "red", lwd = 2, lty = 2)
 
-# Plot 6: Iterations vs polygon area
-plot(development_polygons_filtered$area_m2_numeric, 
-     buffer_diagnostics$iterations,
-     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.3),
-     main = "Iterations vs Polygon Area",
-     xlab = "Polygon area (m²)",
-     ylab = "Iterations required",
-     log = "x")
+# Plot 6: Iterations (for iterative cases only)
+if(n_iterative > 0) {
+  hist(buffer_diagnostics$iterations[buffer_diagnostics$method == "iterative"],
+       breaks = 20,
+       main = "Iterations Required (Iterative Cases)",
+       xlab = "Number of iterations",
+       col = "orange",
+       border = "white")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No iterative cases", cex = 2)
+}
 
 par(mfrow = c(1, 1))
 dev.off()
