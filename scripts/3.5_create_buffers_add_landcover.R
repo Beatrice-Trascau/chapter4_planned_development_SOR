@@ -44,216 +44,112 @@ development_polygons_filtered <- development_polygons |>
 
 ## 2.2. Create buffers ---------------------------------------------------------
 
-cat("\n=== CREATING BUFFERS BY SCALING (2A - A) ===\n")
-cat("Method: Scale polygons by √2 to create 2A, subtract original A to get buffer B\n")
-cat("Estimated time: ~14 hours for", nrow(development_polygons_filtered), "polygons\n")
-cat("Progress will be saved every 10,000 polygons\n\n")
+# Set scaling factor
+scale_factor <- sqrt(2)  # to double area
 
-scale_factor <- sqrt(2)  # To double area
+# Extract original coordinate reference system
 original_crs <- st_crs(development_polygons_filtered)
 
-cat("Step 1: Scaling all polygons to 2x area...\n")
+# Create minimal data structure to reduce processing time
+polygons_minimal <- development_polygons_filtered |>
+  select(polygon_id, area_m2_numeric)
+
+# Get start time (to check how long this takes)
 start_time_scaling <- Sys.time()
 
-# Get centroids and scale all polygons at once (fast)
-centroids <- st_centroid(st_geometry(development_polygons_filtered))
-scaled_geoms <- (st_geometry(development_polygons_filtered) - centroids) * scale_factor + centroids
+# Scale around the centroids
+centroids <- st_centroid(st_geometry(polygons_minimal))
+scaled_geoms <- (st_geometry(polygons_minimal) - centroids) * scale_factor + centroids
 st_crs(scaled_geoms) <- original_crs
 
+# Check how long it takes for the scaling
 scaling_time <- as.numeric(difftime(Sys.time(), start_time_scaling, units = "secs"))
 cat("  Completed in", round(scaling_time, 2), "seconds\n\n")
 
-cat("Step 2: Creating buffer zones (2A - A) for each polygon...\n")
-cat("  This will take approximately 14 hours\n")
-cat("  Checkpoints will be saved every 10,000 polygons\n\n")
+# Prepare the loop
+chunk_size <- 5000
+n_chunks <- ceiling(nrow(polygons_minimal) / chunk_size)
+all_chunk_data <- vector("list", n_chunks)
+overall_start <- Sys.time()
 
-start_time_buffers <- Sys.time()
-
-# Initialize
-polygon_buffers <- development_polygons_filtered
-
-# Progress tracking
-progress_interval <- 1000
-checkpoint_interval <- 10000
-total_polygons <- nrow(polygon_buffers)
-
-# Create buffers one by one (st_difference needs row-by-row for MULTIPOLYGON)
-for(i in 1:total_polygons) {
+# Create buffer zones (2A -A) in chunks
+for(chunk_num in 1:n_chunks) {
   
-  # Create buffer: 2A - A
-  buffer_geom <- st_difference(scaled_geoms[i], 
-                               st_geometry(development_polygons_filtered)[i])
-  st_geometry(polygon_buffers)[i] <- buffer_geom
+  start_idx <- (chunk_num - 1) * chunk_size + 1
+  end_idx <- min(chunk_num * chunk_size, nrow(polygons_minimal))
+  n_in_chunk <- end_idx - start_idx + 1
   
-  # Progress reporting
-  if(i %% progress_interval == 0) {
-    elapsed <- as.numeric(difftime(Sys.time(), start_time_buffers, units = "mins"))
-    rate <- i / elapsed
-    remaining <- (total_polygons - i) / rate
-    pct_complete <- round(100 * i / total_polygons, 1)
-    
-    cat("  ", i, "/", total_polygons, "(", pct_complete, "%) |",
-        "Elapsed:", round(elapsed, 1), "min |",
-        "Remaining:", round(remaining, 1), "min |",
-        "Rate:", round(rate, 0), "poly/min\n")
+  if(chunk_num %% 5 == 0 || chunk_num == 1 || chunk_num == n_chunks) {
+    cat("  Chunk", chunk_num, "of", n_chunks, 
+        "(polygons", start_idx, "to", end_idx, ")...")
   }
   
-  # Save checkpoint
-  if(i %% checkpoint_interval == 0) {
-    checkpoint_file <- here("data", "derived_data", 
-                            paste0("buffer_checkpoint_", i, ".rds"))
-    saveRDS(polygon_buffers[1:i, ], checkpoint_file)
-    cat("    Checkpoint saved:", checkpoint_file, "\n")
+  chunk_start <- Sys.time()
+  
+  # extract this chunk
+  chunk_original <- st_geometry(polygons_minimal)[start_idx:end_idx]
+  chunk_scaled <- scaled_geoms[start_idx:end_idx]
+  chunk_areas <- polygons_minimal$area_m2_numeric[start_idx:end_idx]
+  chunk_ids <- polygons_minimal$polygon_id[start_idx:end_idx]
+  
+  # create buffers using pairwise st_difference
+  chunk_buffer_list <- mapply(FUN = function(scaled, orig) st_difference(scaled, orig),
+                              chunk_scaled, chunk_original, SIMPLIFY = FALSE)
+  
+  # convert to sfc and create sf object
+  chunk_buffer_sfc <- st_sfc(chunk_buffer_list, crs = original_crs)
+  chunk_sf <- data.frame(polygon_id = chunk_ids,
+                         buffer_area_m2 = as.numeric(st_area(chunk_buffer_sfc))) |>
+    st_sf(geometry = chunk_buffer_sfc, crs = original_crs)
+  
+  all_chunk_data[[chunk_num]] <- chunk_sf
+  
+  chunk_time <- as.numeric(difftime(Sys.time(), chunk_start, units = "secs"))
+  
+  if(chunk_num %% 5 == 0 || chunk_num == 1 || chunk_num == n_chunks) {
+    cat(" done in", round(chunk_time, 1), "sec\n")
+  }
+  
+  # memory cleanup every 5 chunks
+  if(chunk_num %% 5 == 0) {
+    gc()
   }
 }
 
-buffer_time <- as.numeric(difftime(Sys.time(), start_time_buffers, units = "mins"))
+# Get notified about how long it took to create the buffers
+buffer_time <- as.numeric(difftime(Sys.time(), overall_start, units = "mins"))
 total_time <- (scaling_time / 60) + buffer_time
+cat("\n✓ Buffer creation complete! Total time:", round(total_time, 1), "minutes\n\n")
 
-cat("\nBuffer creation complete!\n")
-cat("  Total time:", round(total_time / 60, 2), "hours\n\n")
+# Combine chunks
+buffer_output <- do.call(rbind, all_chunk_data)
 
-# Create comprehensive diagnostics
-cat("Calculating buffer diagnostics...\n")
+# Join buffer geometries back to full development polygon data
+polygon_buffers <- development_polygons_filtered |>
+  inner_join(st_drop_geometry(buffer_output) |> select(polygon_id, buffer_area_m2), 
+             by = "polygon_id") |>
+  st_set_geometry(buffer_output$geometry[match(development_polygons_filtered$polygon_id, 
+                                               buffer_output$polygon_id)])
 
-original_areas <- as.numeric(st_area(development_polygons_filtered))
-scaled_areas <- as.numeric(st_area(scaled_geoms))
-buffer_areas <- as.numeric(st_area(polygon_buffers))
-
-buffer_diagnostics <- data.frame(
-  polygon_id = development_polygons_filtered$polygon_id,
-  original_area_m2 = original_areas,
-  scaled_area_m2 = scaled_areas,
-  buffer_area_m2 = buffer_areas,
-  target_scaled_area = original_areas * 2,
-  target_buffer_area = original_areas,
-  scaled_ratio = scaled_areas / (original_areas * 2),
-  buffer_ratio = buffer_areas / original_areas,
-  stringsAsFactors = FALSE
-)
+# Calculate  diagnostics
+buffer_diagnostics <- data.frame(polygon_id = development_polygons_filtered$polygon_id,
+                                 original_area_m2 = development_polygons_filtered$area_m2_numeric,
+                                 buffer_area_m2 = buffer_output$buffer_area_m2,
+                                 buffer_ratio = buffer_output$buffer_area_m2 / development_polygons_filtered$area_m2_numeric)
 
 # Save diagnostics
 saveRDS(buffer_diagnostics, 
         here("data", "derived_data", "buffer_creation_diagnostics.rds"))
-cat("Diagnostics saved to: data/derived_data/buffer_creation_diagnostics.rds\n\n")
 
 # Report accuracy
-cat("=== ACCURACY SUMMARY ===\n\n")
+within_10pct <- mean(abs(buffer_diagnostics$buffer_ratio - 1) <= 0.10, na.rm = TRUE)
+within_20pct <- mean(abs(buffer_diagnostics$buffer_ratio - 1) <= 0.20, na.rm = TRUE)
 
-cat("Scaling accuracy (2A):\n")
-cat("  Mean scaled/target ratio:", round(mean(buffer_diagnostics$scaled_ratio, na.rm = TRUE), 6), 
-    "(expected: 1.000000)\n")
-cat("  All scaled areas are mathematically exact (ratio = 2.0)\n\n")
-
-cat("Buffer accuracy (B = 2A - A):\n")
-cat("  Mean buffer/original ratio:", round(mean(buffer_diagnostics$buffer_ratio, na.rm = TRUE), 4), 
-    "(expected: ~1.0)\n")
-cat("  Median:", round(median(buffer_diagnostics$buffer_ratio, na.rm = TRUE), 4), "\n")
-cat("  Std Dev:", round(sd(buffer_diagnostics$buffer_ratio, na.rm = TRUE), 4), "\n")
-cat("  Range:", round(min(buffer_diagnostics$buffer_ratio, na.rm = TRUE), 4), "to",
-    round(max(buffer_diagnostics$buffer_ratio, na.rm = TRUE), 4), "\n\n")
-
-# Accuracy distribution
-within_1pct <- abs(buffer_diagnostics$buffer_ratio - 1) <= 0.01
-within_5pct <- abs(buffer_diagnostics$buffer_ratio - 1) <= 0.05
-within_10pct <- abs(buffer_diagnostics$buffer_ratio - 1) <= 0.10
-within_20pct <- abs(buffer_diagnostics$buffer_ratio - 1) <= 0.20
-
-cat("Accuracy distribution:\n")
-cat("  Within 1% of target:", sum(within_1pct, na.rm = TRUE), 
-    "(", round(100 * mean(within_1pct, na.rm = TRUE), 1), "%)\n")
-cat("  Within 5% of target:", sum(within_5pct, na.rm = TRUE), 
-    "(", round(100 * mean(within_5pct, na.rm = TRUE), 1), "%)\n")
-cat("  Within 10% of target:", sum(within_10pct, na.rm = TRUE), 
-    "(", round(100 * mean(within_10pct, na.rm = TRUE), 1), "%)\n")
-cat("  Within 20% of target:", sum(within_20pct, na.rm = TRUE), 
-    "(", round(100 * mean(within_20pct, na.rm = TRUE), 1), "%)\n\n")
-
-# Identify high-error cases
-high_error <- abs(buffer_diagnostics$buffer_ratio - 1) > 0.20
-if(sum(high_error) > 0) {
-  cat("Note:", sum(high_error), "polygons (", 
-      round(100 * mean(high_error), 1), "%) have >20% error\n")
-  high_error_ids <- buffer_diagnostics$polygon_id[high_error]
-  saveRDS(high_error_ids, 
-          here("data", "derived_data", "high_error_buffer_ids.rds"))
-  cat("  High-error polygon IDs saved to: data/derived_data/high_error_buffer_ids.rds\n\n")
-}
-
-# Create diagnostic plot
-cat("Creating diagnostic figure...\n")
-png(filename = here("figures", "FigureS_buffer_creation_diagnostics.png"),
-    width = 12, height = 8, units = "in", res = 300)
-
-par(mfrow = c(2, 3))
-
-# Plot 1: Buffer ratio distribution
-hist(buffer_diagnostics$buffer_ratio, 
-     breaks = 50,
-     main = "Buffer Area Ratio Distribution",
-     xlab = "Buffer area / Original area",
-     col = "steelblue",
-     border = "white")
-abline(v = 1, col = "red", lwd = 2, lty = 2)
-abline(v = c(0.9, 1.1), col = "orange", lwd = 1, lty = 2)
-
-# Plot 2: Accuracy categories
-accuracy_counts <- c(
-  "Within 1%" = sum(within_1pct),
-  "1-5%" = sum(within_5pct & !within_1pct),
-  "5-10%" = sum(within_10pct & !within_5pct),
-  "10-20%" = sum(within_20pct & !within_10pct),
-  ">20%" = sum(!within_20pct)
-)
-barplot(accuracy_counts,
-        main = "Accuracy Distribution",
-        ylab = "Number of polygons",
-        col = c("darkgreen", "lightgreen", "yellow", "orange", "red"),
-        las = 2)
-
-# Plot 3: Buffer ratio vs polygon area
-plot(buffer_diagnostics$original_area_m2,
-     buffer_diagnostics$buffer_ratio,
-     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.2),
-     main = "Buffer Accuracy vs Polygon Area",
-     xlab = "Original polygon area (m²)",
-     ylab = "Buffer area / Original area",
-     log = "x")
-abline(h = 1, col = "red", lwd = 2, lty = 2)
-abline(h = c(0.8, 1.2), col = "orange", lwd = 1, lty = 2)
-
-# Plot 4: Scaled ratio (should all be 2.0)
-hist(buffer_diagnostics$scaled_ratio,
-     breaks = 50,
-     main = "Scaled Polygon Accuracy (2A)",
-     xlab = "Scaled area / Target area",
-     col = "steelblue",
-     border = "white")
-abline(v = 1, col = "red", lwd = 2, lty = 2)
-
-# Plot 5: Buffer area distribution
-hist(log10(buffer_diagnostics$buffer_area_m2),
-     breaks = 50,
-     main = "Buffer Area Distribution",
-     xlab = "log10(Buffer area in m²)",
-     col = "steelblue",
-     border = "white")
-
-# Plot 6: Error vs polygon complexity (using perimeter/area as proxy)
-perimeter <- as.numeric(st_length(st_cast(st_geometry(development_polygons_filtered), "MULTILINESTRING")))
-complexity <- perimeter / sqrt(original_areas)
-plot(complexity,
-     abs(buffer_diagnostics$buffer_ratio - 1),
-     pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.2),
-     main = "Error vs Polygon Complexity",
-     xlab = "Shape complexity (perimeter/√area)",
-     ylab = "Absolute error from target",
-     log = "xy")
-
-par(mfrow = c(1, 1))
-dev.off()
-
-cat("Diagnostic figure saved to: figures/FigureS_buffer_creation_diagnostics.png\n\n")
+# Display buffer accuracy
+cat("Buffer accuracy:\n")
+cat("  Median ratio:", round(median(buffer_diagnostics$buffer_ratio, na.rm = TRUE), 3), "\n")
+cat("  Within 10%:", round(100 * within_10pct, 1), "%\n")
+cat("  Within 20%:", round(100 * within_20pct, 1), "%\n\n")
 
 # Add identifier columns
 development_polygons_filtered$polygon_type <- "Development"
@@ -263,6 +159,7 @@ polygon_buffers$polygon_type <- "Buffer"
 development_polygons_filtered$pair_id <- development_polygons_filtered$polygon_id
 polygon_buffers$pair_id <- polygon_buffers$polygon_id
 
+# Notification when buffer creation is complete
 cat("Buffer creation complete!\n\n")
 
 # 3. GET LAND-COVER DATA FOR POLYGONS AND BUFFERS ------------------------------
