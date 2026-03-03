@@ -367,6 +367,10 @@ colnames(model_data)
 # Break down by polygon type
 print(table(model_data$polygon_type))
 
+# Count development and buffer polygons
+n_dev <- sum(model_data$polygon_type == "Development")
+n_buf <- sum(model_data$polygon_type == "Buffer")
+
 # Check how many development/buffer polygons there are
 if (n_dev == n_buf) {
   cat("PASS: Equal Development and Buffer rows (", n_dev, "each)\n")
