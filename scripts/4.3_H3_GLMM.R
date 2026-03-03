@@ -2,7 +2,7 @@
 # PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
 # 4.3_H3_GLMM
 # This script contains code to test Hypothesis 3: Urban and near-urban polygons
-# will have more SOR than othe planned development types
+# will have more SOR than other planned development types
 ##----------------------------------------------------------------------------##
 
 # 1. LOAD DATA -----------------------------------------------------------------
@@ -12,46 +12,66 @@ library(here)
 source(here("scripts", "0_setup.R"))
 
 # Load polygon all data
-polygon_all_data <- readRDS(here("data", "derived_data",
-                                 "polygons_occurrences_all_data.rds"))
+model_data_raw <- readRDS(here("data", "derived_data",
+                                 "h2_polygon_buffer_data.rds"))
 
 # 2. PREPARE DATA FOR MODELING -------------------------------------------------
 
-# Filter out Ports & Marinas from planned development category
-model_data <- polygon_all_data |>
+# Calculate the density of occurrences per km²
+model_data <- model_data_raw |>
+  # filter out ports & marinas from planned development category
   filter(english_categories != "Ports") |>
-  # log-transform area
-  mutate(log_area = log(area_m2_numeric),
-        # convert development category and kommune to factors
-        development_category = as.factor(english_categories),
-        kommune_factor = as.factor(kommune))
+  # convert area from m² to km²
+  mutate(area_km2 = area_m2_numeric / 1e6,
+         # calculate occurrence density (occurrences per km²)
+         occ_per_km2 = n_occurrences / area_km2,
+         # log-transform area (keeping in m² for comparability with other analyses)
+         log_area = log(area_m2_numeric),
+         # convert land cover and kommune to factors
+         land_cover_name = as.factor(land_cover_name),
+         kommune_factor = as.factor(kommune),
+         # create polygon type factor
+         polygon_type = factor(polygon_type, levels = c("Buffer", "Development")))
 
 # Check if there are any NAs in key variables
-cat("n_occurrences:", sum(is.na(model_data$n_occurrences)), "\n")
+cat("occ_per_km2:", sum(is.na(model_data$occ_per_km2)), "\n")
 cat("log_area:", sum(is.na(model_data$log_area)), "\n")
-cat("development_category:", sum(is.na(model_data$development_category)), "\n")
+cat("land_cover_name:", sum(is.na(model_data$land_cover_name)), "\n")
 cat("kommune_factor:", sum(is.na(model_data$kommune_factor)), "\n")
+cat("polygon_type:", sum(is.na(model_data$polygon_type)), "\n")
 
 # Remove rows with NAs in model variables
 model_data <- model_data |>
-  filter(!is.na(n_occurrences),
+  filter(!is.na(occ_per_km2),
          !is.na(log_area),
-         !is.na(development_category),
-         !is.na(kommune_factor))
+         !is.na(land_cover_name),
+         !is.na(kommune_factor),
+         !is.na(polygon_type))
 
 # Check sample size for model
+cat("\nDataset summary:\n")
+cat("Total observations:", nrow(model_data), "\n")
 cat("Number of municipalities:", n_distinct(model_data$kommune_factor), "\n")
-cat("Development categories:", paste(levels(model_data$development_category), collapse = ", "), "\n")
+cat("Number of polygon pairs:", n_distinct(model_data$pair_id), "\n")
+cat("Land cover types:", paste(levels(model_data$land_cover_name), collapse = ", "), "\n")
+cat("\nObservations by polygon type:\n")
+print(table(model_data$polygon_type))
+cat("\nObservations by land cover:\n")
+print(table(model_data$land_cover_name))
+
+# Check distribution of response variable
+cat("\nOccurrence density (per km²) summary:\n")
+print(summary(model_data$occ_per_km2))
+cat("Proportion of zeros:", mean(model_data$occ_per_km2 == 0), "\n")
 
 # 3. FIT MODELS ----------------------------------------------------------------
 
 ## 3.1. Zero inflated + interaction --------------------------------------------
 
 # Fit model
-h3_model1_zinb_interaction <- glmmTMB(n_occurrences ~ log_area * development_category + (1|kommune_factor),
+h3_model1_zinb_interaction <- glmmTMB(occ_per_km2 ~ log_area * land_cover_name + (1|kommune_factor),
                                       data = model_data,
-                                      family = nbinom2,
-                                      ziformula = ~log_area + development_category)
+                                      family = tweedie(link = "log"))
 
 # Save model
 save(h3_model1_zinb_interaction, file = here::here("data", "models",
@@ -60,10 +80,9 @@ save(h3_model1_zinb_interaction, file = here::here("data", "models",
 ## 3.2. Zero infalted no interaction -------------------------------------------
 
 # Fit model
-h3_model2_zinb_no_interaction <- glmmTMB(n_occurrences ~ log_area + development_category + (1|kommune_factor),
+h3_model2_zinb_no_interaction <- glmmTMB(occ_per_km2 ~ log_area + land_cover_name + (1|kommune_factor),
                                       data = model_data,
-                                      family = nbinom2,
-                                      ziformula = ~log_area + development_category)
+                                      family = tweedie(link = "log"))
 
 # Save model
 save(h3_model2_zinb_no_interaction, file = here::here("data", "models",
