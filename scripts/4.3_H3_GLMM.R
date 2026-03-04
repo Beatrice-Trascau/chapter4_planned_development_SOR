@@ -25,8 +25,8 @@ model_data_mid <- model_data_raw |>
   mutate(area_km2 = area_m2_numeric / 1e6,
          # calculate occurrence density (occurrences per km²)
          occ_per_km2 = n_occurrences / area_km2,
-         # log-transform area (keeping in m² for comparability with other analyses)
-         log_area = log(area_m2_numeric),
+         # log-transform area in km² for model (consistent units)
+         log_area_km2    = log(area_km2),
          # convert land cover and kommune to factors
          land_cover_name = as.factor(land_cover_name),
          kommune_factor = as.factor(kommune),
@@ -73,7 +73,7 @@ cat("Proportion of zeros:", mean(model_data$occ_per_km2 == 0), "\n")
 ## 3.1. Zero inflated + interaction --------------------------------------------
 
 # Fit model
-h3_model1_tweedie_interaction <- glmmTMB(occ_per_km2 ~ log_area * land_cover_name + (1|kommune_factor),
+h3_model1_tweedie_interaction <- glmmTMB(occ_per_km2 ~ log_area_km2 * land_cover_name + (1|kommune_factor),
                                       data = model_data,
                                       family = tweedie(link = "log"))
 
@@ -84,7 +84,7 @@ save(h3_model1_tweedie_interaction, file = here::here("data", "models",
 ## 3.2. Zero infalted no interaction -------------------------------------------
 
 # Fit model
-h3_model2_tweedie_no_interaction <- glmmTMB(occ_per_km2 ~ log_area + land_cover_name + (1|kommune_factor),
+h3_model2_tweedie_no_interaction <- glmmTMB(occ_per_km2 ~ log_area_km2 + land_cover_name + (1|kommune_factor),
                                       data = model_data,
                                       family = tweedie(link = "log"))
 
@@ -180,12 +180,12 @@ if(lrt_result$`Pr(>Chisq)`[2] < 0.05) {
 
 # Generate predictions across land cover types
 predictions <- ggpredict(h3_model1_tweedie_interaction, 
-                         terms = c("log_area [all]", "land_cover_name"),
+                         terms = c("log_area_km2 [all]", "land_cover_name"),
                          type = "fixed")
 
 # Convert predictions to data frame for plotting
 pred_df <- as.data.frame(predictions) |>
-  rename(log_area = x, land_cover_name = group)
+  rename(log_area_km2 = x, land_cover_name = group)
 
 ## 6.2. Create main effects plot -----------------------------------------------
 
@@ -201,12 +201,12 @@ landcover_colours <- viridis(n_landcover, option = "turbo")
 names(landcover_colours) <- unique(pred_df$land_cover_name)
 
 # Faceted prediction plot
-fig_h3_predictions_facet <- ggplot(pred_df, aes(x = log_area, y = predicted)) +
+fig_h3_predictions_facet <- ggplot(pred_df, aes(x = log_area_km2, y = predicted)) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high), 
               fill = "steelblue", alpha = 0.3) +
   geom_line(color = "steelblue", linewidth = 1) +
   facet_wrap(~land_cover_name, scales = "free_y", ncol = 3) +
-  labs(x = expression(paste("Log(Area (m"^2, "))")),
+  labs(x = expression(paste("Log(Area (km"^2, "))")),
        y = expression(paste("Predicted occurrences per km"^2))) +
   theme_classic() +
   theme(panel.grid = element_blank(),
@@ -234,7 +234,7 @@ ggsave(filename = here("figures", "Figure_H3_tweedie_predictions_faceted.pdf"),
 # Calculate slopes for each land cover type
 slopes_emtrends <- emtrends(h3_model1_tweedie_interaction, 
                             specs = "land_cover_name",
-                            var = "log_area",
+                            var = "log_area_km2",
                             type = "response")
 
 cat("\n=== SLOPES (effect of log area on occurrence density) by land cover ===\n")
@@ -252,14 +252,14 @@ slopes_df <- as.data.frame(slopes_summary)
 # Fix the land cover names and add color variable
 slopes_df <- slopes_df |>
   mutate(land_cover_name = gsub("_", " ", land_cover_name),
-         color_direction = ifelse(log_area.trend > 0, "Positive", "Negative"))
+         color_direction = ifelse(log_area_km2.trend > 0, "Positive", "Negative"))
 
 # Define colors
 slope_colors <- c("Positive" = "orange", "Negative" = "purple")
 
 # Create plot
-fig_slopes <- ggplot(slopes_df, aes(x = reorder(land_cover_name, log_area.trend), 
-                                    y = log_area.trend,
+fig_slopes <- ggplot(slopes_df, aes(x = reorder(land_cover_name, log_area_km2.trend), 
+                                    y = log_area_km2.trend,
                                     color = color_direction)) +
   geom_point(size = 4) +
   geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL),
