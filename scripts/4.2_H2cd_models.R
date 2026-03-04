@@ -120,7 +120,7 @@ coef_table_h2c <- broom.mixed::tidy(best_model_h2c,
 
 # Save coefficient table
 write.csv(coef_table_h2c,
-          here("figures", "Table_H2c_full_interaction_coefficients.csv"),
+          here("figures", "Table_H2c_twoway_interaction_coefficients.csv"),
           row.names = FALSE)
 
 # 5. MODEL DIAGNOSTICS WITH DHARMA ---------------------------------------------
@@ -132,9 +132,9 @@ sim_residuals_h2c <- simulateResiduals(fittedModel = best_model_h2c,
                                        n = 1000)
 
 # Create diagnostic plots
-png(filename = here("figures", "Figure_H2c_full_interaction_diagnostics.png"),
+png(filename = here("figures", "Figure_H2c_twoway_interaction_diagnostics.png"),
     width = 12, height = 8, units = "in", res = 300)
-plot(sim_residuals_h2c, main = "DHARMa Diagnostics - H2c Full Interaction Model")
+plot(sim_residuals_h2c)
 dev.off()
 
 # Test for dispersion
