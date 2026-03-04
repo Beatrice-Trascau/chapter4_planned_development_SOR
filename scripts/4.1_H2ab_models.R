@@ -312,3 +312,5 @@ saveRDS(list(h2a_polygon_type = emmeans_polygon_h2a,
              h2b_polygon_type = emmeans_polygon_h2b,
              h2b_contrast = contrast_polygon_h2b),
         here("data", "models", "h2ab_tweedie_emmeans.rds"))
+
+# END OF SCRIPT ----------------------------------------------------------------
