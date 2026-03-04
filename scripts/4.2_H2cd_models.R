@@ -148,3 +148,81 @@ print(zeroinflation_test_h2c)
 # Test for outliers
 outlier_test_h2c <- testOutliers(sim_residuals_h2c)
 print(outlier_test_h2c)
+
+# 6. EXTRACT RANDOM EFFECTS AND MODEL PARAMETERS -------------------------------
+
+## 6.1. H2c Two-way interaction model ------------------------------------------
+
+random_effects_h2c <- VarCorr(best_model_h2c)
+print(random_effects_h2c)
+
+# Calculate ICC (intraclass correlation coefficient)
+re_var_h2c <- as.numeric(random_effects_h2c$cond$kommune_factor[1])
+cat("\nRandom effect variance (kommune):", round(re_var_h2c, 4), "\n")
+
+# 7. EXTRACT PREDICTIONS -------------------------------------------------------
+
+# Define colours for polygon types (used in both H2c models)
+polygon_colours <- c("Buffer" = "#2ca02c", "Development" = "#d62728")
+
+## 7.1. H2c Two-way interaction model ------------------------------------------
+
+predictions_h2c <- ggpredict(best_model_h2c, 
+                             terms = c("log_area_km2 [all]", "polygon_type", "land_cover_name"),
+                             type = "fixed")
+
+# Convert predictions to data frame
+pred_df_h2c <- as.data.frame(predictions_h2c) |>
+  rename(log_area_km2 = x, polygon_type = group, land_cover_name = facet)
+
+# Plot the predictions
+fig_h2c_predictions <- ggplot(pred_df_h2c, aes(x = log_area_km2, y = predicted,
+                                               color = polygon_type, fill = polygon_type)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.2) +
+  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3) +
+  scale_color_manual(values = polygon_colours, name = "Area type") +
+  scale_fill_manual(values = polygon_colours, name = "Area type") +
+  labs(x = expression(paste("Log(Area (km"^2, "))")),
+       y = expression(paste("Predicted species per km"^2))) +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        strip.background = element_rect(fill = "grey90", color = "black"),
+        strip.text = element_text(size = 14, face = "bold"),
+        legend.position = "right",
+        legend.title = element_text(size = 16),
+        legend.text = element_text(size = 14))
+
+# Save H2c prediction figure
+ggsave(filename = here("figures", "Figure_H2c_twoway_interaction_predictions_by_landcover.png"),
+       plot = fig_h2c_predictions, width = 14, height = 10, dpi = 600)
+
+ggsave(filename = here("figures", "Figure_H2c_twoway_interaction_predictions_by_landcover.pdf"),
+       plot = fig_h2c_predictions, width = 14, height = 10, dpi = 600)
+
+# 8. CALCULATE EFFECT SIZES ----------------------------------------------------
+
+## 8.1. H2c Two-way interaction model ------------------------------------------
+
+# Get marginal means for polygon type (averaged across land cover and area)
+emmeans_polygon_h2c <- emmeans(best_model_h2c, 
+                               specs = "polygon_type",
+                               type = "response")
+
+print(summary(emmeans_polygon_h2c))
+
+# Calculate pairwise contrast
+contrast_polygon_h2c <- contrast(emmeans_polygon_h2c, method = "pairwise", type = "response")
+print(summary(contrast_polygon_h2c))
+
+
+# Save emmeans results for both models - after you ad H2d models!
+# saveRDS(list(h2c_full_polygon_type = emmeans_polygon_h2c,
+#              h2c_full_contrast = contrast_polygon_h2c,
+#              h2c_add_polygon_type = emmeans_polygon_h2c_add,
+#              h2c_add_contrast = contrast_polygon_h2c_add),
+#         here("data", "models", "h2c_tweedie_emmeans.rds"))
+
+# END OF SCRIPT ----------------------------------------------------------------
