@@ -76,12 +76,24 @@ h2c_tweedie_two_way_interaction <- glmmTMB(species_per_km2 ~ log_area_km2 * poly
 save(h2c_tweedie_two_way_interaction,
      file = here::here("data", "models", "h2c_tweedie_two_way_interaction.RData"))
 
+## 3.3. H2c Additive Model -----------------------------------------------------
+
+# Set up model
+h2c_tweedie_additive <- glmmTMB(species_per_km2 ~ log_area_km2 + polygon_type + land_cover_name + 
+                                  (1|kommune_factor),
+                                data = model_data_complete,
+                                family = tweedie())
+
+# Save model output
+saveRDS(h2c_tweedie_additive,
+        here("data", "models", "h2c_tweedie_additive.rds"))
 
 # Compare full interaction and two-way interaction models
-AICtab(h2c_tweedie_full_interaction, h2c_tweedie_two_way_interaction, base = TRUE)
+AICtab(h2c_tweedie_full_interaction, h2c_tweedie_two_way_interaction,
+       h2c_tweedie_additive, base = TRUE)
 
 # Select best H2c model
-best_model_h2c <- h2c_tweedie_full_interaction
+best_model_h2c <- h2c_tweedie_two_way_interaction
 
 # 4. MODEL SUMMARY -------------------------------------------------------------
 
@@ -113,7 +125,7 @@ write.csv(coef_table_h2c,
 
 # 5. MODEL DIAGNOSTICS WITH DHARMA ---------------------------------------------
 
-## 5.1. H2c Full interaction model ---------------------------------------------
+## 5.1. H2c Two-way interaction model ------------------------------------------
 
 # Simulate residuals
 sim_residuals_h2c <- simulateResiduals(fittedModel = best_model_h2c, 
