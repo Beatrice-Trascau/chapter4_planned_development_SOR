@@ -603,4 +603,57 @@ if (has_pairing_issue && length(orphaned_buffer_ids) > 0) {
   
 }
 
+# 6. SAVE DF WITH OCCURRENCE-LEVEL DATA ----------------------------------------
+
+# Need to keep occurrence-level information about year and eventID and parentEventID
+# to use in the completeness indices
+
+# Create occurrence-level join for both polygons and buffers
+# This is needed for completeness calculations that require year and eventID
+
+# Create occurrence-level join for both polygons and buffers
+# This is needed for completeness calculations that require year and eventID
+
+# First, do spatial join for development polygons
+dev_occ_join <- st_join(
+  development_polygons_filtered |> 
+    select(polygon_id, pair_id, polygon_type, area_m2_numeric, 
+           english_categories, kommune, land_cover_name),
+  occurrences_sf |> select(gbifID, species, year, parentEventID),
+  join = st_intersects,
+  left = TRUE
+)
+
+cat("Development polygons joined:", nrow(dev_occ_join), "rows\n")
+
+# Second, do spatial join for buffers
+buf_occ_join <- st_join(
+  polygon_buffers |> 
+    select(polygon_id, pair_id, polygon_type, area_m2_numeric, 
+           english_categories, kommune, land_cover_name),
+  occurrences_sf |> select(gbifID, species, year, parentEventID),
+  join = st_intersects,
+  left = TRUE
+)
+
+cat("Buffer polygons joined:", nrow(buf_occ_join), "rows\n")
+
+# Combine both datasets
+polygon_buffer_occurrence_join <- rbind(dev_occ_join, buf_occ_join)
+
+cat("Combined occurrence-level join created:", nrow(polygon_buffer_occurrence_join), "rows\n")
+
+# Remove orphaned buffers from this dataset too
+polygon_buffer_occurrence_join <- polygon_buffer_occurrence_join |>
+  filter(polygon_id %in% dev_ids)
+
+cat("After removing orphaned buffers:", nrow(polygon_buffer_occurrence_join), "rows\n")
+
+# Save this for H2d
+saveRDS(polygon_buffer_occurrence_join,
+        here("data", "derived_data", "h2d_polygon_buffer_occurrence_join.rds"))
+
+cat("Occurrence-level data saved to: h2d_polygon_buffer_occurrence_join.rds\n")
+cat("This file contains year and parentEventID for completeness calculations\n\n")
+
 # END OF SCRIPT ----------------------------------------------------------------
