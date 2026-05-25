@@ -14,9 +14,12 @@ source(here("scripts", "0_setup.R"))
 # Load development polygons
 development_polygons <- st_read(here("data", "raw_data", "nina_planagt.gpkg"))
 
+# Load pre-created buffers
+polygon_buffers <- st_read(here("data", "derived_data", "NoAggPlanBufferNew.gpkg"))
+
 # Load cleaned occurrence records
 clean_occurrences_70m <- read.csv(here("data", "derived_data",
-                                       "clean_occurrences_70m.txt"))
+                                       "clean_occurrences_1km.txt"))
 
 # Load land cover data
 gdb_path <- here("data", "raw_data", "Hovedokosystem_nedlasting", "Hovedokosystem.gdb")
@@ -42,125 +45,6 @@ development_polygons_filtered <- development_polygons |>
                                         arealformalsgruppe == "08 Kombinerte formål" ~ "Combined",
                                         arealformalsgruppe == "13 Forsvaret" ~ "Defense"))
 
-## 2.2. Create buffers ---------------------------------------------------------
-
-# Set scaling factor
-scale_factor <- sqrt(2)  # to double area
-
-# Extract original coordinate reference system
-original_crs <- st_crs(development_polygons_filtered)
-
-# Create minimal data structure to reduce processing time
-polygons_minimal <- development_polygons_filtered |>
-  select(polygon_id, area_m2_numeric)
-
-# Get start time (to check how long this takes)
-start_time_scaling <- Sys.time()
-
-# Scale around the centroids
-centroids <- st_centroid(st_geometry(polygons_minimal))
-scaled_geoms <- (st_geometry(polygons_minimal) - centroids) * scale_factor + centroids
-st_crs(scaled_geoms) <- original_crs
-
-# Check how long it takes for the scaling
-scaling_time <- as.numeric(difftime(Sys.time(), start_time_scaling, units = "secs"))
-cat("  Completed in", round(scaling_time, 2), "seconds\n\n")
-
-# Prepare the loop
-chunk_size <- 5000
-n_chunks <- ceiling(nrow(polygons_minimal) / chunk_size)
-all_chunk_data <- vector("list", n_chunks)
-overall_start <- Sys.time()
-
-# Create buffer zones (2A -A) in chunks
-for(chunk_num in 1:n_chunks) {
-  
-  start_idx <- (chunk_num - 1) * chunk_size + 1
-  end_idx <- min(chunk_num * chunk_size, nrow(polygons_minimal))
-  n_in_chunk <- end_idx - start_idx + 1
-  
-  if(chunk_num %% 5 == 0 || chunk_num == 1 || chunk_num == n_chunks) {
-    cat("  Chunk", chunk_num, "of", n_chunks, 
-        "(polygons", start_idx, "to", end_idx, ")...")
-  }
-  
-  chunk_start <- Sys.time()
-  
-  # extract this chunk
-  chunk_original <- st_geometry(polygons_minimal)[start_idx:end_idx]
-  chunk_scaled <- scaled_geoms[start_idx:end_idx]
-  chunk_areas <- polygons_minimal$area_m2_numeric[start_idx:end_idx]
-  chunk_ids <- polygons_minimal$polygon_id[start_idx:end_idx]
-  
-  # create buffers using pairwise st_difference
-  chunk_buffer_list <- mapply(FUN = function(scaled, orig) st_difference(scaled, orig),
-                              chunk_scaled, chunk_original, SIMPLIFY = FALSE)
-  
-  # convert to sfc and create sf object
-  chunk_buffer_sfc <- st_sfc(chunk_buffer_list, crs = original_crs)
-  chunk_sf <- data.frame(polygon_id = chunk_ids,
-                         buffer_area_m2 = as.numeric(st_area(chunk_buffer_sfc))) |>
-    st_sf(geometry = chunk_buffer_sfc, crs = original_crs)
-  
-  all_chunk_data[[chunk_num]] <- chunk_sf
-  
-  chunk_time <- as.numeric(difftime(Sys.time(), chunk_start, units = "secs"))
-  
-  if(chunk_num %% 5 == 0 || chunk_num == 1 || chunk_num == n_chunks) {
-    cat(" done in", round(chunk_time, 1), "sec\n")
-  }
-  
-  # memory cleanup every 5 chunks
-  if(chunk_num %% 5 == 0) {
-    gc()
-  }
-}
-
-# Get notified about how long it took to create the buffers
-buffer_time <- as.numeric(difftime(Sys.time(), overall_start, units = "mins"))
-total_time <- (scaling_time / 60) + buffer_time
-cat("\n✓ Buffer creation complete! Total time:", round(total_time, 1), "minutes\n\n")
-
-# Combine chunks
-buffer_output <- do.call(rbind, all_chunk_data)
-
-# Join buffer geometries back to full development polygon data
-polygon_buffers <- development_polygons_filtered |>
-  inner_join(st_drop_geometry(buffer_output) |> select(polygon_id, buffer_area_m2), 
-             by = "polygon_id") |>
-  st_set_geometry(buffer_output$geometry[match(development_polygons_filtered$polygon_id, 
-                                               buffer_output$polygon_id)])
-
-# Calculate  diagnostics
-buffer_diagnostics <- data.frame(polygon_id = development_polygons_filtered$polygon_id,
-                                 original_area_m2 = development_polygons_filtered$area_m2_numeric,
-                                 buffer_area_m2 = buffer_output$buffer_area_m2,
-                                 buffer_ratio = buffer_output$buffer_area_m2 / development_polygons_filtered$area_m2_numeric)
-
-# Save diagnostics
-saveRDS(buffer_diagnostics, 
-        here("data", "derived_data", "buffer_creation_diagnostics.rds"))
-
-# Report accuracy
-within_10pct <- mean(abs(buffer_diagnostics$buffer_ratio - 1) <= 0.10, na.rm = TRUE)
-within_20pct <- mean(abs(buffer_diagnostics$buffer_ratio - 1) <= 0.20, na.rm = TRUE)
-
-# Display buffer accuracy
-cat("Buffer accuracy:\n")
-cat("  Median ratio:", round(median(buffer_diagnostics$buffer_ratio, na.rm = TRUE), 3), "\n")
-cat("  Within 10%:", round(100 * within_10pct, 1), "%\n")
-cat("  Within 20%:", round(100 * within_20pct, 1), "%\n\n")
-
-# Add identifier columns
-development_polygons_filtered$polygon_type <- "Development"
-polygon_buffers$polygon_type <- "Buffer"
-
-# Create pair IDs
-development_polygons_filtered$pair_id <- development_polygons_filtered$polygon_id
-polygon_buffers$pair_id <- polygon_buffers$polygon_id
-
-# Notification when buffer creation is complete
-cat("Buffer creation complete!\n\n")
 
 # 3. GET LAND-COVER DATA FOR POLYGONS AND BUFFERS ------------------------------
 
