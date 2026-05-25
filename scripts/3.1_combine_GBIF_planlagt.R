@@ -16,14 +16,14 @@ development_polygons <- st_read(here("data", "raw_data", "nina_planagt.gpkg"))
 
 # Load cleaned occurrence records
 clean_occurrences_70m <- read.csv(here("data", "derived_data",
-                                        "clean_occurrences_70m.txt"))
+                                        "clean_occurrences_1km.txt"))
 
 # 2. JOIN OCCURRENCES TO POLYGONS ----------------------------------------------
 
 ## 2.1. Prepare development polygons -------------------------------------------
 
 # Add unique polygon ID to use as grouping factor after the join
-# Add english category names and numeric area column so they are available for
+# Add English category names and numeric area column so they are available for
 # all subsequent joins and operations without needing to recreate them
 development_polygons <- development_polygons |>
   mutate(polygon_id = row_number(),
