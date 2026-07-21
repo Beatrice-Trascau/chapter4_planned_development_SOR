@@ -52,44 +52,57 @@ development_polygons_temp <- development_polygons |>
 # 3. PREPARE BUFFERS -----------------------------------------------------------
 
 # Check that id column exists in polygons
-if(!"id" %in% colnames(polygon_buffers)){
-  stop("ERROR: Polygon dataframe does not contain 'id' column")
-}
+# if(!"id" %in% colnames(polygon_buffers)){
+#   stop("ERROR: Polygon dataframe does not contain 'id' column")
+# }
 
 # Check you still have all the metadata columns ("CompleteInOcean", "CompleteInOtherPlanned", "InOceanAndOtherPlanned", "EndBufferDist", "EndBufferSize")
-colnames(polygon_buffers)
+# colnames(polygon_buffers)
 
 # Filter buffers to match filtered polygons
-polygon_buffers_temp <- polygon_buffers |>
-  filter(id %in% development_polygons_temp$id)
+# polygon_buffers_temp <- polygon_buffers |>
+#   filter(id %in% development_polygons_temp$id)
 
 # Check how many buffers are fully in the ocean or far from the development polygon (N.B. buffers were created further from the development polygon if the development polygon was completely surrounded by other development polygons and the buffer could not be created around it)
-n_ocean <- sum(polygon_buffers_temp$CompleteInOcean ==1, na.rm = TRUE)
-n_other_planned <- sum(polygon_buffers_temp$CompleteInOtherPlanned ==1, na.rm = TRUE)
-n_mixed <- sum(polygon_buffers_temp$InOceanAndOtherPlanned == 1 & 
-                 polygon_buffers_temp$CompleteInOcean == 0 & 
-                 polygon_buffers_temp$CompleteInOtherPlanned == 0, na.rm = TRUE)
+# n_ocean <- sum(polygon_buffers_temp$CompleteInOcean ==1, na.rm = TRUE)
+# n_other_planned <- sum(polygon_buffers_temp$CompleteInOtherPlanned ==1, na.rm = TRUE)
+# n_mixed <- sum(polygon_buffers_temp$InOceanAndOtherPlanned == 1 & 
+#                  polygon_buffers_temp$CompleteInOcean == 0 & 
+#                  polygon_buffers_temp$CompleteInOtherPlanned == 0, na.rm = TRUE)
 
 # Filter buffers 
+# polygon_buffers_filtered <- polygon_buffers  |>
+#   filter(id %in% development_polygons_temp$id,
+#          CompleteInOcean == 0,
+#          CompleteInOtherPlanned == 0) |>
+#   mutate(polygon_type = "Buffer",
+#          pair_id = id,
+#          buffer_area_m2 = EndBufferSize,
+#          buffer_distance_m = EndBufferDist)
 polygon_buffers_filtered <- polygon_buffers  |>
-  filter(id %in% development_polygons_temp$id,
-         CompleteInOcean == 0,
-         CompleteInOtherPlanned == 0) |>
+  filter(id %in% development_polygons_temp$id)
+
+development_polygons_filtered <- development_polygons_temp |>
+  filter(id %in% polygon_buffers_filtered$id)
+
+polygon_buffers_filtered <- polygon_buffers  |>
+  filter(id %in% development_polygons_filtered$id) |>
   mutate(polygon_type = "Buffer",
          pair_id = id,
          buffer_area_m2 = EndBufferSize,
          buffer_distance_m = EndBufferDist)
 
 # Filter development polygons to keep only those that still have buffers (i.e. that were not removed in the previous step) 
-development_polygons_filtered <- development_polygons_temp |>
-  filter(id %in% polygon_buffers_filtered$od)
+# development_polygons_filtered <- development_polygons_temp |>
+#   filter(id %in% polygon_buffers_filtered$id)
+
 
 # Check how many development polygons and buffers we are left with 
-nrow(development_polygons_filtered)
-nrow(polygon_buffers_filtered)
+nrow(development_polygons_filtered) #131 022
+nrow(polygon_buffers_filtered) #131022
 
 # Check that the number of development polygons left is the same as the number of buffers left
-f (nrow(polygon_buffers_filtered) != nrow(development_polygons_filtered)) {
+if (nrow(polygon_buffers_filtered) != nrow(development_polygons_filtered)) {
   cat("  WARNING: Number of buffers (", nrow(polygon_buffers_filtered), 
       ") doesn't match number of polygons (", nrow(development_polygons_filtered), ")\n")
   
@@ -151,24 +164,30 @@ land_cover_terrestrial <- land_cover |>
 ## 4.2. Extract dominant land-cover for polygons and buffers -------------------
 
 # Create a function to extract the dominant (>50%) land-cover for each set of polygons
-extract_dominant_landcover <- function(polygons, land_cover_data){
+# processes polygons in batches of 5000 to manage memory
+extract_dominant_landcover <- function(polygons, land_cover_data, batch_size = 5000){
   
-  # intersect polygons with land-cover
-  intersection <- st_intersection(polygons, land_cover_data)
+  n_batches <- ceiling(nrow(polygons) / batch_size)
+  results <- vector("list", n_batches)
   
-  # calculate area of each intersection
-  intersection <- intersection |>
-    mutate(intersection_area = as.numeric(st_area(intersection)))
+  for (i in seq_len(n_batches)) {
+    cat("    Processing batch", i, "of", n_batches, "\n")
+    
+    start_idx <- (i - 1) * batch_size + 1
+    end_idx <- min(i * batch_size, nrow(polygons))
+    
+    results[[i]] <- polygons[start_idx:end_idx, ] |>
+      st_join(land_cover_data |> select(land_cover_name, ecotype),
+              join = st_intersects,
+              largest = TRUE) |>
+      st_drop_geometry() |>
+      select(id, land_cover_name, ecotype)
+    
+    gc()
+  }
   
-  # find the land-cover type with the largest area for each polygon
-  dominant_lc <- intersection |>
-    st_drop_geometry() |>
-    group_by(id) |>
-    slice_max(intersection_area, n = 1, with_ties = FALSE) |>
-    select(id, land_cover_name, ecotype) |>
-    ungroup()
+  bind_rows(results)
   
-  return(dominant_lc)
 }
 
 # Extract land-cover for the development polygons (will assign buffers the same as the development polygons)
@@ -177,11 +196,15 @@ polygon_landcover <- extract_dominant_landcover(development_polygons_filtered,
 
 # Join land-cover back to polygons and buffers
 development_polygons_filtered <- development_polygons_filtered |>
-  left_join(polygon_landcover, by = "polygon_id")
+  left_join(polygon_landcover, by = "id")
 
 # Check if there are any polygons without land-cover data
 cat("Polygons without land cover:", 
     sum(is.na(development_polygons_filtered$land_cover_name)), "\n")
+
+# Save df to file
+saveRDS(development_polygons_filtered,
+        here("data", "derived_data", "filtered_polygons_land_cover.rds"))
 
 ## 4.3. Assign same land-cover to buffers --------------------------------------
 
@@ -197,6 +220,12 @@ polygon_buffers_filtered <- polygon_buffers_filtered |>
 # Check if there are any buffers without land-cover data
 cat("Buffers without land cover:", 
     sum(is.na(polygon_buffers_filtered$land_cover_name)), "\n")
+
+# Remove polygons and buffers with NA for land-cover
+development_polygons_filtered <- development_polygons_filtered |>
+  filter(!is.na(land_cover_name))
+polygon_buffers_filtered <- polygon_buffers_filtered |>
+  filter(!is.na(land_cover_name))
 
 # 5. GET OCCURRENCE & SPECIES DATA IN POLYGONS ---------------------------------
 
@@ -220,7 +249,7 @@ occurrences_sf <- st_transform(occurrences_sf, 25833)
 count_occurrences_with_species <- function(polygons, occurrences) {
   
   # spatial join: one row per occurrence per polygon
-  joined <- st_join(polygons |> select(polygon_id),
+  joined <- st_join(polygons |> select(id),
                     occurrences |> select(gbifID, species),
                     join = st_intersects,
                     left = TRUE)
@@ -228,7 +257,7 @@ count_occurrences_with_species <- function(polygons, occurrences) {
   # summarise to one row per polygon
   summary <- joined |>
     st_drop_geometry() |>
-    group_by(polygon_id) |>
+    group_by(id) |>
     summarise(n_occurrences = sum(!is.na(gbifID)),
               n_species     = n_distinct(species[!is.na(species)]),
               species_list  = list(unique(species[!is.na(species)])),
@@ -237,7 +266,7 @@ count_occurrences_with_species <- function(polygons, occurrences) {
   # join summary back to polygons to retain all polygon metadata
   polygons_with_counts <- polygons |>
     st_drop_geometry() |>
-    left_join(summary, by = "polygon_id")
+    left_join(summary, by = "id")
   
   return(polygons_with_counts)
 }
@@ -249,7 +278,7 @@ development_with_counts <- count_occurrences_with_species(development_polygons_f
 
 # Count occurrences for buffers
 cat("  Counting in buffers...\n")
-buffers_with_counts <- count_occurrences_with_species(polygon_buffers,
+buffers_with_counts <- count_occurrences_with_species(polygon_buffers_filtered,
                                                       occurrences_sf)
 
 ## 5.3. Combine polygons and buffers into a single df --------------------------
@@ -263,14 +292,14 @@ polygon_data <- development_with_counts |>
 
 # Select relevant columns from buffers
 buffer_data <- buffers_with_counts |>
-  rename(area_m2_numeric = buffer_area_m2) |>
-  select(id, pair_id, polygon_type,
+  rename(area_m2_numeric = mean_areal) |>
+  select(id, pair_id, polygon_type, area_m2_numeric,
          english_categories, kommune, land_cover_name,
-         n_occurrences, n_species, species_list,
+         n_occurrences, n_species, species_list)
          # keep buffer creation info
-         buffer_area_m2, buffer_distance_m,
-         CompleteInOcean, CompleteInOtherPlanned, 
-         InOceanAndOtherPlanned, EndBufferDist, EndBufferSize)
+         # buffer_area_m2, buffer_distance_m,
+         # CompleteInOcean, CompleteInOtherPlanned, 
+         # InOceanAndOtherPlanned, EndBufferDist, EndBufferSize)
 
 # Combine (N.B. Polygon df will have NA for the buffer-specific columns)
 model_data <- bind_rows(polygon_data, buffer_data)
@@ -290,25 +319,25 @@ model_data_complete <- model_data |>
          !is.na(log_area),
          !is.na(polygon_type),
          !is.na(land_cover_name),
-         !is.na(kommune_factor))
+         !is.na(kommune_factor)) # something happens here and all buffer rows are lost - need to check why this happens!
 
 cat("Final dataset size:", nrow(model_data_complete), "rows\n")
 cat("Number of pairs:", n_distinct(model_data_complete$pair_id), "\n")
 cat("Number of municipalities:", n_distinct(model_data_complete$kommune_factor), "\n")
 
 # Save the full dataset - contains everything needed for H2a, H2b, H2c and H2d:
-saveRDS(model_data_complete,
+saveRDS(model_data,
         here("data", "derived_data", "h2_polygon_buffer_data.rds"))
 
-cat("Dataset saved to data/derived_data/h2_polygon_buffer_data.rds\n")
+# Check why the buffer rows are lost when we are filtering to get the model_data_complete df
 
 # 6. CHECK DATA WAS COMBINED CORRECTLY -----------------------------------------
 
 ## 6.1. Check basic structure --------------------------------------------------
 
 # Count development and buffer polygons
-n_dev <- sum(model_data_complete$polygon_type == "Development")
-n_buf <- sum(model_data_complete$polygon_type == "Buffer")
+n_dev <- sum(model_data$polygon_type == "Development")
+n_buf <- sum(model_data$polygon_type == "Buffer")
 
 if (n_dev == n_buf) {
   cat("YAAAS: Equal Development and Buffer rows (", n_dev, "each)\n")
@@ -319,7 +348,7 @@ if (n_dev == n_buf) {
 ## 6.2. Check the pairing ------------------------------------------------------
 
 # Get pairing
-pair_counts <- model_data_complete |>
+pair_counts <- model_data |>
   group_by(pair_id) |>
   summarise(n_rows = n(),
             n_dev = sum(polygon_type == "Development"),
@@ -336,15 +365,15 @@ if (all(pair_counts$n_rows == 2) && all(pair_counts$n_dev == 1 & pair_counts$n_b
 ## 6.3. Check land-cover matching ----------------------------------------------
 
 # Check that buffers have the same land-cover as their paired polygons
-land_cover_check <- model_data_complete |>
+land_cover_check <- model_data |>
   select(pair_id, polygon_type, land_cover_name) |>
   tidyr::pivot_wider(names_from = polygon_type, values_from = land_cover_name) |>
   mutate(land_cover_match = Development == Buffer)
 
-if (all(landcover_check$land_cover_match, na.rm = TRUE)) {
+if (all(land_cover_check$land_cover_match, na.rm = TRUE)) {
   cat("YAAAS: All buffers have same land cover as their paired polygons\n")
 } else {
-  n_mismatch <- sum(!landcover_check$land_cover_match, na.rm = TRUE)
+  n_mismatch <- sum(!land_cover_check$land_cover_match, na.rm = TRUE)
   cat("OOPSIE:", n_mismatch, "pairs have mismatched land cover\n")
 }
 
@@ -403,7 +432,7 @@ development_occ_join <- st_join(development_polygons_filtered |>
 
 # Spatial join for buffers
 buf_occ_join <- st_join(polygon_buffers_filtered |> 
-                          select(id, pair_id, polygon_type, area_m2_numeric, 
+                          select(id, pair_id, polygon_type, mean_areal, 
                                  english_categories, kommune, land_cover_name),
                         occurrences_sf |> 
                           select(gbifID, species, year, parentEventID),
@@ -411,7 +440,7 @@ buf_occ_join <- st_join(polygon_buffers_filtered |>
                         left = TRUE)
 
 # Combine both datasets
-polygon_buffer_occurrence_join <- rbind(dev_occ_join, buf_occ_join)
+polygon_buffer_occurrence_join <- rbind(development_occ_join, buf_occ_join)
 
 # Save df for H2d
 saveRDS(polygon_buffer_occurrence_join,
