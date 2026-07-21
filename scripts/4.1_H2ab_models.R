@@ -16,8 +16,8 @@ model_data <- readRDS(here("data", "derived_data", "h2_polygon_buffer_data.rds")
 # 2. PREPARE DATA FOR MODELING -------------------------------------------------
 
 # Remove orphaned buffers
-dev_ids <- model_data |> filter(polygon_type == "Development") |> pull(polygon_id)
-model_data <- model_data |> filter(polygon_id %in% dev_ids)
+dev_ids <- model_data |> filter(polygon_type == "Development") |> pull(id)
+model_data <- model_data |> filter(id %in% dev_ids)
 
 # Calculate occurrence density (occurrences per km²)
 model_data_complete <- model_data |>
