@@ -35,12 +35,18 @@ clean_occurrences2 <- clean_occurrences1 |>
 # Check how many records are left
 nrow(clean_occurrences2) 
 
+# Remove the occurrence df that's no longer used to free up some space
+remove(clean_occurrences1)
+
 # 2.3. Remove records with no registered species-level information -------------
 clean_occurrences3 <- clean_occurrences2 |>
   filter(specificEpithet != "")
 
 # Check how many records are left
 nrow(clean_occurrences3) 
+
+# Remove the occurrence df that's no longer used to free up some space
+remove(clean_occurrences2)
 
 # 2.4. Remove duplicate records ------------------------------------------------
 clean_occurrences4 <- clean_occurrences3 |>
@@ -49,55 +55,71 @@ clean_occurrences4 <- clean_occurrences3 |>
 # Check how many records are left
 nrow(clean_occurrences4) # 28 269 295 -> there were no duplicated occurrences
 
+# Remove the occurrence df that's no longer used to free up some space
+remove(clean_occurrences3)
+
 # 2.5. Remove flagged records --------------------------------------------------
 
 # Identify flagged records
 coordinate_flags <- clean_coordinates(x = clean_occurrences4,
-                                      lon = "decimalLongitude",
-                                      lat = "decimalLatitude",
+                                      lon     = "decimalLongitude",
+                                      lat     = "decimalLatitude",
                                       species = "species",
-                                      tests = c("equal", "gbif", "zeros"))
+                                      tests   = c("equal", "gbif", "zeros", "centroids"),
+                                      centroids_detail = "country")
 
 # Get a summary of the records
-summary(coordinate_flags) # no flagged records
+summary(coordinate_flags)
+
+# Remove flagged records
+clean_occurrences5 <- clean_occurrences4 |>
+  filter(coordinate_flags$.summary)
+
+# Check how many records are left
+nrow(clean_occurrences5)
+
+# Remove the occurrence df that's no longer used to free up some space
+remove(clean_occurrences4)
 
 # 3. PREP DF FOR ANALYSIS ------------------------------------------------------
 
 # Check column names
-colnames(clean_occurrences4)
+colnames(clean_occurrences5)
 
 # Remove unnecessary columns and add 1 more column
-clean_occurrences <- clean_occurrences4 |>
+clean_occurrences <- clean_occurrences5 |>
   select(gbifID, identifiedBy, basisOfRecord, occurrenceStatus,
          eventDate, year, countryCode, stateProvince, county, municipality,
          locality, decimalLatitude, decimalLongitude, 
          coordinateUncertaintyInMeters, kingdom, phylum, class, order, family,
          genus, specificEpithet, speciesKey, species, organismQuantity,
-         occurrenceStatus, scientificName, eventID, parentEventID, samplingEffort) 
+         occurrenceStatus, scientificName, eventID, parentEventID, samplingEffort,
+         publisher, institutionID, collectionID, datasetID, institutionCode, 
+         datasetName, ownerInstitutionCode, recordedByID) 
 
 # 4. REMOVE RECORDS BASED ON COORDINATE UNCERTAINTY ----------------------------
 
 ## 4.1. Calculate coordinate uncertainty threshold -----------------------------
 
 # Remove records with coord uncertainty >1000m
-clean_occurrences_15km <- clean_occurrences |>
+clean_occurrences_1km <- clean_occurrences |>
   filter(coordinateUncertaintyInMeters < 1000 &
            !is.na(coordinateUncertaintyInMeters))
 
 # Check how many records are left in the cleaned df
-nrow(clean_occurrences_15km) # 
+nrow(clean_occurrences_1km) # 
 
 # 5. REMOVE RECORDS WITH OCCURRENCESTATUS = ABSENT -----------------------------
 
 # Only keep records with occurrenceStatus = "PRESENT" 
-clean_occurrences_15km <- clean_occurrences_15km |>
+clean_occurrences_1km <- clean_occurrences_1km |>
   filter(occurrenceStatus == "PRESENT")
 
 # Check how many records are left in the cleaned df
-nrow(clean_occurrences_15km) #
+nrow(clean_occurrences_1km) #
 
 # Save cleaned occurrences
-write.csv(clean_occurrences_15km,
+write.csv(clean_occurrences_1km,
           here("data", "derived_data", "clean_occurrences_1km.txt"))
 
 # END OF SCRIPT ----------------------------------------------------------------
