@@ -9,7 +9,7 @@
 
 # Setting username, password and email 
 Sys.setenv(GBIF_USER = "beatrice_trasc.au") # change with your details
-Sys.setenv(GBIF_PWD = "I97zB%$z")
+Sys.setenv(GBIF_PWD = "")
 Sys.setenv(GBIF_EMAIL = "beatrice.m.trascau@ntnu.no")
 
 # 2. CREATE DOWNLOAD REQUEST ---------------------------------------------------
