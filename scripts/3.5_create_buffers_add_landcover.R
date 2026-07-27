@@ -1,8 +1,8 @@
 ##----------------------------------------------------------------------------##
 # PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
 # 3.5_create_buffers_add_landcover
-# This script contains code to test Hypothesis 2a: Area plan polygons have a 
-# greater number of SOR than areas not planned for development
+# This script contains code to prepare the development polygons and buffers
+# for analyses
 ##----------------------------------------------------------------------------##
 
 # 1. LOAD DATA -----------------------------------------------------------------
@@ -17,14 +17,98 @@ development_polygons <- st_read(here("data", "raw_data", "nina_planagt.gpkg"))
 # Load pre-created buffers
 polygon_buffers <- st_read(here("data", "derived_data", "NoAggPlanBufferNew.gpkg"))
 
-# Load cleaned occurrence records
-clean_occurrences_1km <- read.csv(here("data", "derived_data",
-                                       "clean_occurrences_1km.txt"))
-
 # Load land cover data
 gdb_path <- here("data", "raw_data", "Hovedokosystem_nedlasting", "Hovedokosystem.gdb")
 land_cover <- st_read(gdb_path, layer = "Hovedøkosystem", quiet = TRUE)
 
+# 2. CHECK THE POLYGONS, BUFFERS AND LAND-COVER DATA ---------------------------
+
+## 2.1. Check required columns -------------------------------------------------
+
+# Check if development polygons contains every column used downstream
+setdiff(c("id", "arealformalsgruppe", "planlagt_areal_m2", "kommune",
+          "kommunenummer"),
+        colnames(development_polygons))
+stopifnot(all(c("id", "arealformalsgruppe", "planlagt_areal_m2", "kommune",
+                "kommunenummer") %in% colnames(development_polygons)))
+
+# Check if the buffers contain the shared id column
+stopifnot("id" %in% colnames(polygon_buffers))
+
+# Check if land-cover contains the ecotype column
+stopifnot("ecotype" %in% colnames(land_cover))
+
+## 2.2. Check the id column ----------------------------------------------------
+
+# Check that the ids are unique and complete in both datasets
+stopifnot(anyDuplicated(development_polygons$id) == 0,
+          anyDuplicated(polygon_buffers$id) == 0,
+          !any(is.na(development_polygons$id)),
+          !any(is.na(polygon_buffers$id)))
+
+cat("Development polygons loaded:", nrow(development_polygons), "\n")
+cat("Buffers loaded:            ", nrow(polygon_buffers), "\n")
+cat("Land cover features loaded:", nrow(land_cover), "\n")
+
+## 2.3. Check geometries -------------------------------------------------------
+
+# Check that there are no empty geometries (which would return NA in spatial joins)
+cat("\nEmpty geometries - polygons:", sum(st_is_empty(development_polygons)),
+    " buffers:", sum(st_is_empty(polygon_buffers)),
+    " land cover:", sum(st_is_empty(land_cover)), "\n")
+
+stopifnot(!any(st_is_empty(development_polygons)),
+          !any(st_is_empty(polygon_buffers)))
+
+# Check if the geomtry types are polygonal
+cat("\nGeometry types:\n")
+print(table(st_geometry_type(development_polygons)))
+print(table(st_geometry_type(polygon_buffers)))
+
+# Check if there are any invalid geomtries (which could fail the st_join)
+cat("\nInvalid geometries - polygons:", sum(!st_is_valid(development_polygons)), "\n")
+cat("Invalid geometries - buffers: ", sum(!st_is_valid(polygon_buffers)), "\n")
+
+# 3. HARMONISE CRS -------------------------------------------------------------
+
+# Set CRS for everything else based on the development polygons (ETRS89/UTM33N)
+cat("\nPolygon CRS:   ", st_crs(development_polygons)$input, "\n")
+cat("Buffer CRS:    ", st_crs(polygon_buffers)$input, "\n")
+cat("Land cover CRS:", st_crs(land_cover)$input, "\n")
+
+# Check that all three objects have a defined CRS
+stopifnot(!is.na(st_crs(development_polygons)),
+          !is.na(st_crs(polygon_buffers)),
+          !is.na(st_crs(land_cover)))
+
+# Transform buffers to match the polygons if needed
+if (st_crs(polygon_buffers) != st_crs(development_polygons)) {
+  cat("\nTransforming buffers to match polygon CRS...\n")
+  polygon_buffers <- st_transform(polygon_buffers, st_crs(development_polygons))
+}
+
+# Transform land-cover to match the polygons if needed
+if (st_crs(land_cover) != st_crs(development_polygons)) {
+  cat("Transforming land cover to match polygon CRS...\n")
+  land_cover <- st_transform(land_cover, st_crs(development_polygons))
+}
+
+# Check tha everything now shares one CRS
+stopifnot(st_crs(development_polygons) == st_crs(polygon_buffers),
+          st_crs(development_polygons) == st_crs(land_cover))
+cat("\nPASS: all layers share the same CRS\n")
+
+# Check that the transformation went well and all layers still overlap in space
+print(rbind(polygons   = st_bbox(development_polygons),
+            buffers    = st_bbox(polygon_buffers),
+            land_cover = st_bbox(land_cover)))
+
+if (length(st_intersection(st_as_sfc(st_bbox(development_polygons)),
+                           st_as_sfc(st_bbox(land_cover)))) == 0) {
+  stop("ERROR: polygon and land cover bounding boxes do not overlap")
+} else {
+  cat("\nPASS: polygon and land cover extents overlap\n")
+}
 
 # 2. PREPARE DEVELOPMENT POLYGONS ----------------------------------------------
 
