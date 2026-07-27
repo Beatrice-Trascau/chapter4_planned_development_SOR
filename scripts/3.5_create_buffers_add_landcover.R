@@ -286,7 +286,7 @@ stopifnot(nrow(development_polygons_temp) == nrow(polygon_landcover))
 
 # Check the polygons with NA for land-cover (which do not overlap with any of the terrestrial classes)
 cat("\nPolygons with no terrestrial land cover:",
-    sum(is.na(development_polygons_temp$land_cover_name)), "\n")
+    sum(is.na(development_polygons_temp$land_cover_name)), "\n") #1141
 
 # Check which land-covers the polygons with NA actually intersect with
 water_only_polygons <- extract_dominant_landcover(
@@ -298,9 +298,12 @@ water_only_polygons <- extract_dominant_landcover(
 
 # Check how many are marine vs freshwater
 print(table(water_only_polygons$water_type, useNA = "ifany"))
+# Freshwater = 73    Sea = 1068
 
 # Get a detailed breakdown by land-cover class
 print(table(water_only_polygons$land_cover_name, useNA = "ifany"))
+# Coastal           Lakes Marine_offshore          Rivers 
+# 597              59             471              14 
 
 # Check if there are any polygons that fall outside of terrestrial and marine/aquatic and if they fall outside of the land-cover dataset entirely
 if (any(water_only_polygons$water_type == "Unclassified")) {
@@ -322,14 +325,229 @@ development_polygons_filtered <- development_polygons_temp |>
 
 # Check how many we are left with after filtering
 cat("\nPolygons retained after removing water-only polygons:",
-    nrow(development_polygons_filtered), "\n")
+    nrow(development_polygons_filtered), "\n") #129882 
 
 # And check that the numbers are correct
 stopifnot(nrow(development_polygons_filtered) + nrow(water_only_polygons) ==
             nrow(development_polygons_temp))
 cat("PASS: retained + removed = total polygons\n")
 
+# 6. MATCH BUFFERS TO POLYGONS -------------------------------------------------
 
+## 6.1. Keep only the buffers with a matching polygon --------------------------
 
+# Remove buffers whose id is not in the retained development polygons
+polygon_buffers_filtered <- polygon_buffers |>
+  filter(id %in% development_polygons_filtered$id)
+
+# Check how many buffers were removed and how many were retained
+cat("\nBuffers removed (no matching polygon):",
+    nrow(polygon_buffers) - nrow(polygon_buffers_filtered), "\n") #3762
+cat("Buffers retained:", nrow(polygon_buffers_filtered), "\n") #129881
+
+## 6.2. Keep only polygons that still have a buffer ----------------------------
+
+# Drop the polygons that did not have a buffer created (Ivar reported 1)
+cat("Polygons dropped because they have no buffer:",
+    sum(!development_polygons_filtered$id %in% polygon_buffers_filtered$id), "\n") #1
+development_polygons_filtered <- development_polygons_filtered |>
+  filter(id %in% polygon_buffers_filtered$id)
+
+# Check that the two id sets are identical 
+stopifnot(setequal(development_polygons_filtered$id, polygon_buffers_filtered$id))
+cat("PASS: polygons and buffers have identical id sets\n")
+cat("Final number of pairs:", nrow(development_polygons_filtered), "\n") # 129881
+
+## 6.3. Transfer polygons metadata and land-cover to the buffers ---------------
+
+# Buffers will inherit the category, municipality, and land-cover category from their paired polygon
+polygon_buffers_filtered <- polygon_buffers_filtered |>
+  left_join(development_polygons_filtered |>
+              st_drop_geometry() |>
+              dplyr::select(id, arealformalsgruppe, english_categories,
+                            kommunenummer, kommune, land_cover_name, ecotype),
+            by = "id") |>
+  mutate(polygon_type = "Buffer",
+         pair_id      = id,
+         # buffers have no NINA-recorded area; reference column is NA for them
+         planlagt_area_reference = NA_real_)
+
+# Calculate buffer are from the geometry
+# (st_area() on the sf object uses the active geometry column, whatever it is called)
+polygon_buffers_filtered$area_m2_numeric <- as.numeric(st_area(polygon_buffers_filtered))
+
+# Check that the join transferred the metadata without duplicating the rows
+stopifnot(anyDuplicated(polygon_buffers_filtered$id) == 0)
+cat("\nBuffers without land cover after join:",
+    sum(is.na(polygon_buffers_filtered$land_cover_name)), "\n") #0
+
+# Check that the buffer areas are usable
+cat("Buffers with zero or negative area:",
+    sum(polygon_buffers_filtered$area_m2_numeric <= 0), "\n") #0
+
+# 7. COMBINE POLYGONS AND BUFFERS INTO SINGLE OBJECTS --------------------------
+
+# Keep matching columns in both objects 
+# Select the columns we want to keep in the polygons
+polygon_out <- development_polygons_filtered |>
+  dplyr::select(id, pair_id, polygon_type, area_m2_numeric,
+                planlagt_area_reference,
+                arealformalsgruppe, english_categories,
+                kommunenummer, kommune, land_cover_name, ecotype)
+
+# Select the columns we want to keep in the buffers
+buffer_out <- polygon_buffers_filtered |>
+  dplyr::select(id, pair_id, polygon_type, area_m2_numeric,
+                planlagt_area_reference,
+                arealformalsgruppe, english_categories,
+                kommunenummer.x, kommune, land_cover_name, ecotype) |>
+  # there are two columns in  polygon_buffers_filtered: kommunenummer.x and kommunenummer.y
+  # identical(polygon_buffers_filtered$kommunenummer.x, polygon_buffers_filtered$kommunenummer.y) gives TRUE
+  # rename kommunenummer.x to just have kommunenummer 
+  dplyr::rename(kommunenummer = kommunenummer.x)
+
+# Rename geometry columns of both buffers and polygons before biding (rbind on sf object needs the same name)
+names(polygon_out)[names(polygon_out) == attr(polygon_out, "sf_column")] <- "geometry"
+st_geometry(polygon_out) <- "geometry"
+names(buffer_out)[names(buffer_out) == attr(buffer_out, "sf_column")] <- "geometry"
+st_geometry(buffer_out) <- "geometry"
+
+# Check that the identical columns are in order and have the same CRS
+stopifnot(identical(names(polygon_out), names(buffer_out)),
+          st_crs(polygon_out) == st_crs(buffer_out)) 
+cat("\nPASS: polygon and buffer objects are structurally identical\n") # PASS
+
+# Bind datasets and add variables for later models 
+polygon_buffer_data <- rbind(polygon_out, buffer_out) |>
+  mutate(polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
+         land_cover_name = factor(land_cover_name),
+         kommune_factor = factor(kommune),
+         pair_id_factor = factor(pair_id),
+         log_area = log(area_m2_numeric))
+
+# Check that no rows were gained or lost in the bind
+stopifnot(nrow(polygon_buffer_data) == nrow(polygon_out) + nrow(buffer_out))
+cat("\nFinal dataset:", nrow(polygon_buffer_data), "rows\n") # 259762
+print(table(polygon_buffer_data$polygon_type))
+# Buffer Development 
+# 129881      129881
+
+# 8. FINAL CHECKS --------------------------------------------------------------
+
+# Check the pairing 
+pair_counts <- polygon_buffer_data |>
+  st_drop_geometry() |>
+  group_by(pair_id) |>
+  summarise(n_rows = n(),
+            n_dev = sum(polygon_type == "Development"),
+            n_buf = sum(polygon_type == "Buffer"),
+            .groups = "drop")
+
+if (all(pair_counts$n_rows == 2) &&
+    all(pair_counts$n_dev == 1 & pair_counts$n_buf == 1)) {
+  cat("\nPASS: every pair_id has exactly 1 Development + 1 Buffer\n")
+} else {
+  cat("\nFAIL:", nrow(pair_counts |> filter(n_rows != 2 | n_dev != 1 | n_buf != 1)),
+      "pairs have incorrect composition\n")
+} # PASS
+
+# Check that land-cover is matching within pairs (i.e. both the polygons and buffers within a pair have the same land-cover category)
+land_cover_check <- polygon_buffer_data |>
+  st_drop_geometry() |>
+  dplyr::select(pair_id, polygon_type, land_cover_name) |>
+  tidyr::pivot_wider(names_from = polygon_type, values_from = land_cover_name) |>
+  mutate(land_cover_match = Development == Buffer)
+
+if (all(land_cover_check$land_cover_match, na.rm = TRUE)) {
+  cat("PASS: all buffers share the land cover of their paired polygon\n")
+} else {
+  cat("FAIL:", sum(!land_cover_check$land_cover_match, na.rm = TRUE),
+      "pairs have mismatched land cover\n")
+} # PASS
+
+# Check for missing values
+print(colSums(is.na(st_drop_geometry(polygon_buffer_data)))) #planlagt_area_reference does not have values for any of the rows but it's ok
+
+# Check that log-area values are finite everywhere
+cat("\nNon-finite log_area values:",
+    sum(!is.finite(polygon_buffer_data$log_area)), "\n") #Non-finite log_area values: 0 
+stopifnot(all(is.finite(polygon_buffer_data$log_area)))
+
+# Inspect range of log_area values going into the models later
+# small polygons may give large-negative log_area values
+cat("\nlog_area summary (this is what enters the GLMMs):\n")
+print(summary(polygon_buffer_data$log_area))
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 5.011   7.195   7.914   8.193   8.857  16.700 
+
+# Check the buffer:polygon ration on the final paired object
+area_ratio_check <- polygon_buffer_data |>
+  st_drop_geometry() |>
+  dplyr::select(pair_id, polygon_type, area_m2_numeric) |>
+  tidyr::pivot_wider(names_from  = polygon_type,
+                     values_from = area_m2_numeric) |>
+  mutate(buffer_polygon_ratio = Buffer / Development)
+
+cat("\nBuffer / Development area ratio on final paired object:\n")
+print(summary(area_ratio_check$buffer_polygon_ratio))
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 1.000   1.018   1.044   1.059   1.086  10.889 
+
+# Flag if the median has drifted away from ~1 (might mean that the pairing has gone wrong)
+if (abs(median(area_ratio_check$buffer_polygon_ratio, na.rm = TRUE) - 1) > 0.25) {
+  cat("WARNING: median buffer/polygon ratio is far from 1 - check pairing\n")
+} else {
+  cat("PASS: median buffer/polygon area ratio is near 1\n")
+} # PASS
+
+# Check distributions
+cat("\nLand cover distribution:\n")
+print(table(polygon_buffer_data$land_cover_name,
+            polygon_buffer_data$polygon_type))
+#                     Buffer   Development
+# Cropland            10036       10036
+# Forest              89381       89381
+# Grassland            2473        2473
+# Heathland            8581        8581
+# Settlements         14734       14734
+# Sparsely_vegetated   1903        1903
+# Wetlands             2773        2773
+
+cat("\nDevelopment category distribution:\n")
+print(table(polygon_buffer_data$english_categories,
+            polygon_buffer_data$polygon_type))
+#                Buffer Development
+# Combined       4266        4266
+# Commercial     9662        9662
+# Defense          25          25
+# Mining         4436        4436
+# Recreational  55702       55702
+# Residential   44009       44009
+# Retail          900         900
+# Services       5568        5568
+# Tourism        5313        5313
+
+cat("\nMunicipalities represented:",
+    n_distinct(polygon_buffer_data$kommune_factor), "\n") #353
+
+# Final list of how many polygons we lost along the way and where
+cat("\n--- POLYGON ACCOUNTING ---\n")
+cat("Loaded from file:", nrow(development_polygons), "\n") #133644 
+cat("After removing Ports:", nrow(development_polygons_temp), "\n") #131023 
+cat("Removed as water-only:", nrow(water_only_polygons), "\n") # 1141 
+cat("Removed for having no buffer:",
+    nrow(development_polygons_temp) - nrow(water_only_polygons) -
+      nrow(development_polygons_filtered), "\n") #1
+cat("Final paired polygons: ", nrow(development_polygons_filtered), "\n") #129881 
+
+# Save final paired polygon-buffer object
+saveRDS(polygon_buffer_data,
+        here("data", "derived_data", "polygon_buffer_data.rds"))
+
+# Check that the file was written and reads back with the expected dimensions
+stopifnot(file.exists(here("data", "derived_data", "polygon_buffer_data.rds")))
+stopifnot(identical(dim(readRDS(here("data", "derived_data",
+                                     "polygon_buffer_data.rds"))),
+                    dim(polygon_buffer_data)))
 
 # END OF SCRIPT ----------------------------------------------------------------
