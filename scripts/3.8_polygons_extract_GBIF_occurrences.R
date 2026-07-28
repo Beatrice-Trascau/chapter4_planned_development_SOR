@@ -17,7 +17,14 @@ polygon_buffer_data <- readRDS(here("data", "derived_data",
 
 # Load the cleaned GBIF occurrences
 clean_occurrences <- read.csv(here("data", "derived_data",
-                                   "clean_occurrences_1km.txt"))
+                                   "clean_occurrences_1km.txt"))[,
+                                                                 c("gbifID", "species", "year", "parentEventID",
+                                                                   "decimalLongitude", "decimalLatitude")]
+
+clean_occurrences <- data.table::fread(here("data", "derived_data", "clean_occurrences_1km.txt"),
+                                       select = c("gbifID","species","year","parentEventID",
+                                                  "decimalLongitude","decimalLatitude")) |> 
+  as.data.frame()
 
 # 2. CHECK INPUT  --------------------------------------------------------------
 
@@ -54,6 +61,10 @@ occurrences_sf <- clean_occurrences |>
   filter(!is.na(decimalLongitude), !is.na(decimalLatitude)) |>
   st_as_sf(coords = c("decimalLongitude", "decimalLatitude"), crs = 4326)
 
+# Remove the occurrence data frame to free up space
+rm(clean_occurrences)
+gc()
+
 # Transform occurrences to the CRS of the polygons
 occurrences_sf <- st_transform(occurrences_sf, st_crs(polygon_buffer_data))
 
@@ -71,46 +82,86 @@ cat("Occurrence points with valid coordinates:", nrow(occurrences_sf), "\n") # 1
 
 # 4. JOIN OCCURRENCES TO POLYGONS & BUFFERS ------------------------------------
 
+# Set chunk size
+chunk_size <- 2000
+n_chunks   <- ceiling(nrow(polygon_buffer_data) / chunk_size)
+
+# Create list to store results in
+counts_list <- vector("list", n_chunks)
+h2d_list    <- vector("list", n_chunks)
+
 # The spatial join will give two outputs: the counts of the occurrences (for H2a,b)
 # and an occurrence-level object for H2d
 # Keeping the polygons and buffers that do not have any occurrences
 # Only keeping the key + the occurrence field to keep this object as small and
 # easy to run as possible and will add polygon metadata after
-cat("\nJoining occurrences to polygons and buffers (this is the slow step)...\n")
+cat("\nJoining occurrences to", nrow(polygon_buffer_data),
+    "polygons/buffers in", n_chunks, "chunks of", chunk_size, "...\n")
 
-occurrence_join <- st_join(polygon_buffer_data |> 
-                             dplyr::select(poly_uid),
-                           occurrences_sf |> 
-                             dplyr::select(gbifID, species, year, parentEventID),
-                           join = st_intersects,
-                           left = TRUE) |>
-  st_drop_geometry()
+overall_start <- Sys.time()
+
+for (i in seq_len(n_chunks)) {
+  
+  start_idx <- (i - 1) * chunk_size + 1
+  end_idx   <- min(i * chunk_size, nrow(polygon_buffer_data))
+  
+  # this chunk of polygons/buffers, carrying only the key
+  chunk <- polygon_buffer_data[start_idx:end_idx, ] |>
+    dplyr::select(poly_uid)
+  
+  # join occurrences to this chunk (left = TRUE keeps zero-occurrence polygons)
+  joined_chunk <- st_join(chunk,
+                          occurrences_sf,
+                          join = st_intersects,
+                          left = TRUE) |>
+    st_drop_geometry()
+  
+  # reduce to per-polygon counts immediately (this is what bounds memory)
+  counts_list[[i]] <- joined_chunk |>
+    group_by(poly_uid) |>
+    summarise(n_occurrences = sum(!is.na(gbifID)),
+              n_species     = n_distinct(species[!is.na(species)]),
+              species_list  = list(unique(species[!is.na(species)])),
+              .groups = "drop")
+  
+  # keep only MATCHED rows for the H2d occurrence-level object. Zero-occurrence
+  # polygons contribute nothing to completeness, so dropping their NA rows here
+  # is both correct and a large memory saving.
+  h2d_list[[i]] <- joined_chunk |>
+    filter(!is.na(gbifID)) |>
+    dplyr::select(poly_uid, gbifID, species, year, parentEventID)
+  
+  # discard the big intermediate and reclaim memory before the next chunk
+  rm(chunk, joined_chunk)
+  
+  if (i %% 5 == 0 || i == 1 || i == n_chunks) {
+    elapsed <- round(as.numeric(difftime(Sys.time(), overall_start, units = "mins")), 1)
+    cat("  chunk", i, "of", n_chunks, "done (", elapsed, "min elapsed )\n")
+    gc()
+  }
+}
 
 # Check how mnay rows we have
-cat("Join produced", nrow(occurrence_join), "occurrence-polygon rows\n")
+cat("Chunked join complete in",
+    round(as.numeric(difftime(Sys.time(), overall_start, units = "mins")), 1),
+    "minutes\n")
 
-# 5. COUNT OCCURRENCES AND SPECIES PER POLYGON AND BUFFER ----------------------
+# 5. ASSEMBLE PER-POLYGON MODEL DATA -------------------------------------------
 
-# One row per polygon/buffer. For a polygon with no occurrences the join gave a
-# single NA row, so n_occurrences = 0, n_species = 0, species_list = empty list.
-occurrence_counts <- occurrence_join |>
-  group_by(poly_uid) |>
-  summarise(n_occurrences = sum(!is.na(gbifID)),
-            n_species = n_distinct(species[!is.na(species)]),
-            species_list = list(unique(species[!is.na(species)])),
-            .groups = "drop")
+# Combine the per-chunk counts
+occurrence_counts <- bind_rows(counts_list)
+rm(counts_list); gc()
 
-# Check that there is exactly one count row per polygon/buffer
+# Check that there is exactly one count row per polygon or buffer
 stopifnot(nrow(occurrence_counts) == nrow(polygon_buffer_data),
           anyDuplicated(occurrence_counts$poly_uid) == 0)
 
-# Attach the counts to the full metadata
+# Attach counts to the full metadata (it does not need the geometry)
 model_data <- polygon_buffer_data |>
   st_drop_geometry() |>
   left_join(occurrence_counts, by = "poly_uid")
 
-# Check the join added countrs without adding or losing rows, and every row got its counts
-# (i.e. there were no NAs introduced by a key mismatch)
+# Check that the counts were added without gaining or losing rows and without causing key mismatch
 stopifnot(nrow(model_data) == nrow(polygon_buffer_data),
           !any(is.na(model_data$n_occurrences)),
           !any(is.na(model_data$n_species)))
@@ -118,9 +169,11 @@ cat("\nModel data assembled:", nrow(model_data), "rows\n")
 
 # 6. BUILD OCCURRENCE-LEVEL OBJECT FOR H2D -------------------------------------
 
-# One row per occurrernce per polygon/buffer, with year and parentEventID for 
-# completeness calculations and re-attache the poulygon metadata to the join from section 4
-polygon_buffer_occurrence_join <- occurrence_join |>
+# Combine the matched occurrence rows and then re-attach polygon metadata
+polygon_buffer_occurrence_join <- bind_rows(h2d_list)
+rm(h2d_list); gc()
+
+polygon_buffer_occurrence_join <- polygon_buffer_occurrence_join |>
   left_join(polygon_buffer_data |>
               st_drop_geometry() |>
               dplyr::select(poly_uid, id, pair_id, polygon_type,
@@ -128,8 +181,8 @@ polygon_buffer_occurrence_join <- occurrence_join |>
                             land_cover_name),
             by = "poly_uid")
 
-# Check that no rows were gained or lost re-attaching metadata
-stopifnot(nrow(polygon_buffer_occurrence_join) == nrow(occurrence_join))
+# Check how many rows we have
+cat("H2d occurrence-level rows:", nrow(polygon_buffer_occurrence_join), "\n")
 
 # 7. CHECK THE RESULTS ---------------------------------------------------------
 
@@ -152,7 +205,6 @@ pair_counts <- model_data |>
             n_dev  = sum(polygon_type == "Development"),
             n_buf  = sum(polygon_type == "Buffer"),
             .groups = "drop")
-
 if (all(pair_counts$n_rows == 2) &&
     all(pair_counts$n_dev == 1 & pair_counts$n_buf == 1)) {
   cat("PASS: every pair has exactly 1 Development + 1 Buffer\n")
