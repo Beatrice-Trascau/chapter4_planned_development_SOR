@@ -47,7 +47,7 @@ stopifnot(anyDuplicated(development_polygons$id) == 0,
           !any(is.na(polygon_buffers$id)))
 
 cat("Development polygons loaded:", nrow(development_polygons), "\n") # 133644
-cat("Buffers loaded:            ", nrow(polygon_buffers), "\n") # 133644
+cat("Buffers loaded:            ", nrow(polygon_buffers), "\n") # 133643
 cat("Land cover features loaded:", nrow(land_cover), "\n") # 1001965
 
 ## 2.3. Check geometries -------------------------------------------------------
@@ -112,7 +112,7 @@ if (st_crs(land_cover) != st_crs(development_polygons)) {
 # Check that everything now shares one CRS
 stopifnot(st_crs(development_polygons) == st_crs(polygon_buffers),
           st_crs(development_polygons) == st_crs(land_cover))
-cat("\nPASS: all layers share the same CRS\n")
+cat("\nPASS: all layers share the same CRS\n") # PASS
 
 # Check that the transformation went well and all layers still overlap in space
 print(rbind(polygons   = st_bbox(development_polygons),
@@ -124,14 +124,13 @@ if (length(st_intersection(st_as_sfc(st_bbox(development_polygons)),
   stop("ERROR: polygon and land cover bounding boxes do not overlap")
 } else {
   cat("\nPASS: polygon and land cover extents overlap\n")
-}
+} # PASS
 
 # 4. PREPARE DEVELOPMENT POLYGONS ----------------------------------------------
 
 # Drop Ports & Marinas and translate category names
 development_polygons_temp <- development_polygons |>
   filter(arealformalsgruppe != "16 Havner og småbåthavner")
-
 
 # Calculate area_m2_numeric from the geomtry (st_area) and not from planlagt_areal_m2
 # see script 3.5_polygons_area_checks for details
