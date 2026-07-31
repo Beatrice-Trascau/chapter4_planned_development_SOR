@@ -3,11 +3,13 @@
 # 3.8_polygons_extract_GBIF_occurrences
 # This script contains code to extract the GBIF species occurrence records for 
 # development polygons and buffers
+# N.B: the spatial join is done in chunks and processed on 4 cores in parallel
 ##----------------------------------------------------------------------------##
 
 # 1. LOAD DATA -----------------------------------------------------------------
 
 # Source the setup file
+library(parallel)
 library(here)
 source(here("scripts", "0_setup.R"))
 
@@ -20,11 +22,6 @@ clean_occurrences <- read.csv(here("data", "derived_data",
                                    "clean_occurrences_1km.txt"))[,
                                                                  c("gbifID", "species", "year", "parentEventID",
                                                                    "decimalLongitude", "decimalLatitude")]
-
-clean_occurrences <- data.table::fread(here("data", "derived_data", "clean_occurrences_1km.txt"),
-                                       select = c("gbifID","species","year","parentEventID",
-                                                  "decimalLongitude","decimalLatitude")) |> 
-  as.data.frame()
 
 # 2. CHECK INPUT  --------------------------------------------------------------
 
@@ -86,71 +83,65 @@ cat("Occurrence points with valid coordinates:", nrow(occurrences_sf), "\n") # 1
 chunk_size <- 2000
 n_chunks   <- ceiling(nrow(polygon_buffer_data) / chunk_size)
 
-# Create list to store results in
-counts_list <- vector("list", n_chunks)
-h2d_list    <- vector("list", n_chunks)
+# Set number of forked workers
+n_cores <- 4
+cat("\nRunning", n_chunks, "chunks of", chunk_size,
+    "across", n_cores, "forked workers...\n")
 
-# The spatial join will give two outputs: the counts of the occurrences (for H2a,b)
-# and an occurrence-level object for H2d
-# Keeping the polygons and buffers that do not have any occurrences
-# Only keeping the key + the occurrence field to keep this object as small and
-# easy to run as possible and will add polygon metadata after
-cat("\nJoining occurrences to", nrow(polygon_buffer_data),
-    "polygons/buffers in", n_chunks, "chunks of", chunk_size, "...\n")
+# The workers join one chunk of polygons to the occurrences, then reduce to small outputs => each worker returns little data
+# The forked workers will inherit polygon_buffer_data, occurrences_sf and chunk_size from 
 
-overall_start <- Sys.time()
-
-for (i in seq_len(n_chunks)) {
+process_chunk <- function(i) {
   
   start_idx <- (i - 1) * chunk_size + 1
   end_idx   <- min(i * chunk_size, nrow(polygon_buffer_data))
   
-  # this chunk of polygons/buffers, carrying only the key
   chunk <- polygon_buffer_data[start_idx:end_idx, ] |>
     dplyr::select(poly_uid)
   
-  # join occurrences to this chunk (left = TRUE keeps zero-occurrence polygons)
-  joined_chunk <- st_join(chunk,
-                          occurrences_sf,
-                          join = st_intersects,
-                          left = TRUE) |>
+  joined_chunk <- st_join(chunk, occurrences_sf,
+                          join = st_intersects, left = TRUE) |>
     st_drop_geometry()
   
-  # reduce to per-polygon counts immediately (this is what bounds memory)
-  counts_list[[i]] <- joined_chunk |>
+  # per-polygon counts (all polygons in chunk, incl. zero-occurrence)
+  counts <- joined_chunk |>
     group_by(poly_uid) |>
     summarise(n_occurrences = sum(!is.na(gbifID)),
               n_species     = n_distinct(species[!is.na(species)]),
               species_list  = list(unique(species[!is.na(species)])),
               .groups = "drop")
   
-  # keep only MATCHED rows for the H2d occurrence-level object. Zero-occurrence
-  # polygons contribute nothing to completeness, so dropping their NA rows here
-  # is both correct and a large memory saving.
-  h2d_list[[i]] <- joined_chunk |>
+  # matched occurrence rows only (for H2d) - zero-occurrence polygons contribute
+  # nothing to completeness, so their NA rows are dropped here
+  h2d <- joined_chunk |>
     filter(!is.na(gbifID)) |>
     dplyr::select(poly_uid, gbifID, species, year, parentEventID)
   
-  # discard the big intermediate and reclaim memory before the next chunk
-  rm(chunk, joined_chunk)
-  
-  if (i %% 5 == 0 || i == 1 || i == n_chunks) {
-    elapsed <- round(as.numeric(difftime(Sys.time(), overall_start, units = "mins")), 1)
-    cat("  chunk", i, "of", n_chunks, "done (", elapsed, "min elapsed )\n")
-    gc()
-  }
+  list(counts = counts, h2d = h2d)
 }
 
-# Check how mnay rows we have
-cat("Chunked join complete in",
+overall_start <- Sys.time()
+
+# Run the function in parallel
+results <- mclapply(seq_len(n_chunks), process_chunk,
+                    mc.cores = n_cores, mc.preschedule = TRUE)
+
+cat("Parallel join complete in",
     round(as.numeric(difftime(Sys.time(), overall_start, units = "mins")), 1),
     "minutes\n")
+
+# Check that none of the loops gave errors
+errored <- vapply(results, function(x) inherits(x, "try-error"), logical(1))
+if (any(errored)) {
+  stop("ERROR: ", sum(errored), " chunk(s) failed in parallel. First message:\n",
+       as.character(results[[which(errored)[1]]]))
+}
+cat("PASS: all", n_chunks, "chunks completed without error\n")
 
 # 5. ASSEMBLE PER-POLYGON MODEL DATA -------------------------------------------
 
 # Combine the per-chunk counts
-occurrence_counts <- bind_rows(counts_list)
-rm(counts_list); gc()
+occurrence_counts <- bind_rows(lapply(results, `[[`, "counts"))
 
 # Check that there is exactly one count row per polygon or buffer
 stopifnot(nrow(occurrence_counts) == nrow(polygon_buffer_data),
@@ -170,8 +161,9 @@ cat("\nModel data assembled:", nrow(model_data), "rows\n")
 # 6. BUILD OCCURRENCE-LEVEL OBJECT FOR H2D -------------------------------------
 
 # Combine the matched occurrence rows and then re-attach polygon metadata
-polygon_buffer_occurrence_join <- bind_rows(h2d_list)
-rm(h2d_list); gc()
+polygon_buffer_occurrence_join <- bind_rows(lapply(results, `[[`, "h2d"))
+rm(results)
+gc()
 
 polygon_buffer_occurrence_join <- polygon_buffer_occurrence_join |>
   left_join(polygon_buffer_data |>
@@ -247,7 +239,6 @@ saveRDS(polygon_buffer_occurrence_join,
 # Check that both files were written and read back with the expected row counts
 stopifnot(file.exists(here("data", "derived_data", "h2_polygon_buffer_data.rds")),
           file.exists(here("data", "derived_data", "h2d_polygon_buffer_occurrence_join.rds")),
-          nrow(readRDS(here("data", "derived_data", "h2_polygon_buffer_data.rds"))) == nrow(polygon_buffer_data)
-)
+          nrow(readRDS(here("data", "derived_data", "h2_polygon_buffer_data.rds"))) == nrow(polygon_buffer_data))
 
 # END OF SCRIPT ----------------------------------------------------------------
