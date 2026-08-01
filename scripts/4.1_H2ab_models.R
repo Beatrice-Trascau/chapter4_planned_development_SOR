@@ -52,6 +52,17 @@ pair_data <- pair_data |>
          kommune_factor = factor(kommune),
          land_cover_name = factor(land_cover_name))
 
+# Build the presence data
+# Keep the long form (one row per polygon AND per buffer) and flag presence
+presence_data <- model_data |>
+  mutate(presence = as.integer(n_occurrences > 0),
+         polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
+         # centred log area of THIS unit (polygon or buffer)
+         log_area_c = as.numeric(scale(log(area_m2_numeric), scale = FALSE)),
+         land_cover_name = factor(land_cover_name),
+         kommune_factor = factor(kommune),
+         pair_id_factor = factor(pair_id))
+
 ## 2.2. Check the reshaped df --------------------------------------------------
 
 # Check we have exactly one row per pair
@@ -63,26 +74,28 @@ stopifnot(!any(is.na(pair_data$sor_polygon)),
           !any(is.na(pair_data$sor_buffer)),
           all(is.finite(pair_data$area_offset)),
           all(is.finite(pair_data$log_area_c)))
-cat("PASS: counts complete and offset/area finite\n")
+cat("PASS: counts complete and offset/area finite\n") # PASS
 
 # Quick glance at the response variable
 cat("Pairs with any records:", sum(pair_data$any_records), "of",
     nrow(pair_data), "(",
     round(100 * mean(pair_data$any_records), 1), "%)\n")
-cat("Pairs with zero records in BOTH halves:", sum(pair_data$sor_total == 0), "\n")
-cat("Polygon share of records (record-bearing pairs only):\n")
+cat("Pairs with zero records in BOTH halves:", sum(pair_data$sor_total == 0), "\n") # 21513 of 129881 (16.6 %)
+cat("Polygon share of records (record-bearing pairs only):\n") # 108368
 print(summary(pair_data$share_polygon))
 
 # Check that the area offset sits near 0 for most pairs
 cat("\nArea offset log(area_polygon/area_buffer) summary:\n")
 print(summary(pair_data$area_offset))
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max.     NAs 
+# 0.0000  0.0000  0.1538  0.3757  0.8750  1.0000  108368
 
 # 3. FIT MODELS ----------------------------------------------------------------
 
 # Set up models so that we separate pairs that do not have any species occurrence records
 # from those that have some records
 pair_records <- pair_data |> filter(sor_total > 0)
-cat("\nPairs entering the split model (H2a / H2b):", nrow(pair_records), "\n")
+cat("\nPairs entering the split model (H2a / H2b):", nrow(pair_records), "\n") #21513
 
 ## 3.1. H2ab split model with full interaction ---------------------------------
 
@@ -113,9 +126,12 @@ save(h2ab_betabin_additive,
 
 # Compare full interaction and additive models
 AICtab(h2ab_betabin_full, h2ab_betabin_additive, base = TRUE)
+#                       AIC     dAIC    df
+# h2ab_betabin_additive 73638.6     0.0 10
+# h2ab_betabin_full     73645.1     6.5 16
 
 # Get the best model
-best_split <- h2ab_betabin_full
+best_split <- h2ab_betabin_additive
 
 ## 3.3. H1 presence model with full interaction  ------------------------
 
@@ -145,6 +161,9 @@ save(h1_presence_additive,
 
 # Compare the models
 AICtab(h1_presence_full, h1_presence_additive, base = TRUE)
+#                      AIC      dAIC     df
+# h1_presence_full     131345.1      0.0 18
+# h1_presence_additive 131604.5    259.4 11
 
 # Use the best model
 best_presence <- h1_presence_full
@@ -358,14 +377,16 @@ print(summary(emm_presence))
 # Compare development polygons vs buffers as an odds ratio
 contrast_presence <- contrast(emm_presence, method = "revpairwise", type = "response")
 cat("\nDevelopment vs Buffer (odds ratio for holding any records):\n")
-print(summary(contrast_presence))
+print(summary(contrast_presence, infer = TRUE))   # infer = TRUE adds the CI
 
 # Get the odds-ratio CI
-con_df <- as.data.frame(contrast_presence)
-or_col <- grep("odds.ratio|ratio", names(con_df), value = TRUE)[1]
+con_df <- as.data.frame(confint(contrast_presence))
+or_col <- grep("ratio|estimate", names(con_df), value = TRUE)[1]
 or_lo  <- con_df[[grep("LCL|lower", names(con_df), value = TRUE)[1]]]
 or_hi  <- con_df[[grep("UCL|upper", names(con_df), value = TRUE)[1]]]
 or_est <- con_df[[or_col]]
+
+stopifnot(length(or_est) == 1, length(or_lo) == 1, length(or_hi) == 1)
 
 cat(sprintf("\nOdds ratio (Development / Buffer): %.3f  [%.3f, %.3f]\n",
             or_est, or_lo, or_hi))
@@ -384,6 +405,12 @@ saveRDS(list(presence_by_side = emm_presence,
         here("data", "models", "h1_presence_inference.rds"))
 
 # 8. PREDICTION FIGURES --------------------------------------------------------
+
+# Little function to display the land-cover names properly
+pretty_lc <- function(x) {
+  x <- gsub("_", " ", x)
+  gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
+}
 
 ## 8.1. H2ab - predicted share of SOR by area and land-cover -------------------
 
@@ -406,23 +433,24 @@ pred_df_split <- pred_df_split |>
   filter(log_area_c >= lo, log_area_c <= hi) |>
   select(-lo, -hi)
 
-fig_split_predictions <- ggplot(pred_df_split,
+(fig_split_predictions <- ggplot(pred_df_split,
                                 aes(x = log_area_c, y = predicted)) +
   geom_hline(yintercept = 0.5, linetype = "dashed",
              colour = "grey40", linewidth = 0.5) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
-              fill = "#d62728", alpha = 0.2) +
-  geom_line(colour = "#d62728", linewidth = 1.2) +
-  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3) +
+              fill = "#E66101", alpha = 0.2) +
+  geom_line(colour = "#E66101", linewidth = 1.2) +
+  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+             labeller = as_labeller(pretty_lc)) +
   scale_y_continuous(labels = scales::percent) +
-  labs(x = "Centred log(polygon area)",
-       y = "Predicted share of records within the development polygon") +
+  labs(x = expression(paste("log(Polygon Area (m"^2, "))")),
+       y = "Predicted share of SOR Within the Development Polygons") +
   theme_classic() +
   theme(panel.grid       = element_blank(),
         axis.title       = element_text(size = 16),
         axis.text        = element_text(size = 14),
         strip.background  = element_rect(fill = "grey90", colour = "black"),
-        strip.text       = element_text(size = 14, face = "bold"))
+        strip.text       = element_text(size = 14, face = "bold")))
 
 # Save figure to file
 ggsave(filename = here("figures", "Figure_H2ab_predicted_share_by_landcover.png"),
@@ -439,21 +467,22 @@ landcover_plot_df <- landcover_df |>
          conf.high = grep("UCL|upper", names(landcover_df), value = TRUE)[1])
 
 # Plot figure
-fig_h2a_landcover <- ggplot(landcover_plot_df,
+(fig_h2a_landcover <- ggplot(landcover_plot_df,
                             aes(x = reorder(land_cover_name, share),
                                 y = share)) +
   geom_hline(yintercept = 0.5, linetype = "dashed",
              colour = "grey40", linewidth = 0.5) +
   geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
-                  colour = "#d62728", linewidth = 0.8, size = 0.6) +
+                  colour = "#E66101", linewidth = 0.8, size = 0.6) +
   scale_y_continuous(labels = scales::percent) +
+  scale_x_discrete(labels = pretty_lc) +
   coord_flip() +
-  labs(x = "Land cover",
-       y = "Estimated share of records within the development polygon") +
+  labs(x = "Land-cover Type",
+       y = "Estimated Share of SOR Within the Development Polygons") +
   theme_classic() +
   theme(panel.grid = element_blank(),
         axis.title = element_text(size = 14),
-        axis.text  = element_text(size = 12))
+        axis.text  = element_text(size = 12)))
 
 # Save figure to file
 ggsave(filename = here("figures", "Figure_H2a_share_by_landcover_pointrange.png"),
@@ -471,31 +500,28 @@ slope_plot_df <- slope_lc_df |>
          conf.high = grep("UCL|upper", names(slope_lc_df), value = TRUE)[1])
 
 # Plot figure
-fig_h2b_slope <- ggplot(slope_plot_df,
+(fig_h2b_slope <- ggplot(slope_plot_df,
                         aes(x = reorder(land_cover_name, slope), y = slope)) +
   geom_hline(yintercept = 0, linetype = "dashed",
              colour = "grey40", linewidth = 0.5) +
   geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
                   colour = "#1f77b4", linewidth = 0.8, size = 0.6) +
   coord_flip() +
+  scale_x_discrete(labels = pretty_lc) +
   labs(x = "Land cover",
        y = "Effect of log(area) on polygon share (logit-scale slope)") +
   theme_classic() +
   theme(panel.grid = element_blank(),
         axis.title = element_text(size = 14),
-        axis.text  = element_text(size = 12))
+        axis.text  = element_text(size = 12)))
 
-# Save figure to file 
-ggsave(filename = here("figures", "Figure_H2b_area_slope_by_landcover.png"),
-       plot = fig_h2b_slope, width = 10, height = 7, dpi = 600)
-ggsave(filename = here("figures", "Figure_H2b_area_slope_by_landcover.pdf"),
-       plot = fig_h2b_slope, width = 10, height = 7, dpi = 600)
+# This figure isn't telling us much so I won't save it
 
 ## 8.4. H1 - probability of SOR presence by land-cover -------------------------
 
 # Get per-side presence probability for development vs buffer within land-cover
 predictions_presence <- ggpredict(best_presence,
-                                  terms = c("log_area_c [all]", "polygon_type",
+                                  terms = c("log_area_c [n=100]", "polygon_type",
                                             "land_cover_name"))
 
 # Get df
@@ -517,26 +543,27 @@ pred_df_presence <- pred_df_presence |>
 polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
 
 # Create figure
-fig_presence_predictions <- ggplot(pred_df_presence,
+(fig_presence_predictions <- ggplot(pred_df_presence,
                                    aes(x = log_area_c, y = predicted,
                                        colour = polygon_type, fill = polygon_type)) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
   geom_line(linewidth = 1.2) +
-  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3) +
+  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+             labeller = as_labeller(pretty_lc)) +
   scale_colour_manual(values = polygon_colours, name = "Area type") +
   scale_fill_manual(values = polygon_colours, name = "Area type") +
   scale_y_continuous(labels = scales::percent) +
-  labs(x = "Centred log(area)",
-       y = "Probability a unit holds any occurrence records") +
+  labs(x = expression(paste("log(Area (m"^2, "))")),
+       y = "Probability of Unit Containing Any SOR") +
   theme_classic() +
-  theme(panel.grid       = element_blank(),
-        axis.title       = element_text(size = 16),
-        axis.text        = element_text(size = 14),
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
         strip.background  = element_rect(fill = "grey90", colour = "black"),
-        strip.text       = element_text(size = 14, face = "bold"),
+        strip.text = element_text(size = 14, face = "bold"),
         legend.position  = "right",
-        legend.title     = element_text(size = 16),
-        legend.text      = element_text(size = 14))
+        legend.title = element_text(size = 16),
+        legend.text = element_text(size = 14)))
 
 # Save figure to file
 ggsave(filename = here("figures", "Figure_H1_presence_by_side_and_landcover.png"),
