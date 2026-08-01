@@ -79,276 +79,469 @@ print(summary(pair_data$area_offset))
 
 # 3. FIT MODELS ----------------------------------------------------------------
 
-## 3.1. H2a Full three-way interaction -----------------------------------------
+# Set up models so that we separate pairs that do not have any species occurrence records
+# from those that have some records
+pair_records <- pair_data |> filter(sor_total > 0)
+cat("\nPairs entering the split model (H2a / H2b):", nrow(pair_records), "\n")
 
-# Set up model
-h2a_tweedie_full_interaction <- glmmTMB(occ_per_km2 ~ log_area_km2 * polygon_type * land_cover_name + 
-                                  (1|kommune_factor),
-                                data = model_data_complete,
-                                family = tweedie())
+## 3.1. H2ab split model with full interaction ---------------------------------
 
-# Save model output
-save(h2a_tweedie_full_interaction, file = here::here("data", "models", "h2a_tweedie_full_interaction.RData"))
-
-## 3.2. H2a Two-way interaction -----------------------------------------
-
-# Set up model
-h2a_tweedie_two_way_interaction <- glmmTMB(occ_per_km2 ~ log_area_km2 * polygon_type + log_area_km2 * land_cover_name + 
-                                             polygon_type * land_cover_name + 
-                                          (1|kommune_factor),
-                                        data = model_data_complete,
-                                        family = tweedie())
+# Set up model with full interaction (i.e. does the split and its area slope depend on the land-cover?)
+# Use the area offset to adjust the response to the area
+h2ab_betabin_full <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
+                               log_area_c * land_cover_name +
+                               offset(area_offset) + (1 | kommune_factor),
+                             data   = pair_records,
+                             family = betabinomial)
 
 # Save model output
-save(h2a_tweedie_two_way_interaction, file = here::here("data", "models", "h2a_tweedie_two_way_interaction.RData"))
+save(h2ab_betabin_full,
+     file = here::here("data", "models", "h2ab_betabin_full.RData"))
 
-# Compare full interaction and two-way interaction models
-AICtab(h2a_tweedie_full_interaction, h2a_tweedie_two_way_interaction, base = TRUE)
+## 3.2. H2ab additive split model ----------------------------------------------
+
+# Set up model
+h2ab_betabin_additive <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
+                                   log_area_c + land_cover_name +
+                                   offset(area_offset) + (1 | kommune_factor),
+                                 data   = pair_records,
+                                 family = betabinomial)
+
+# Save model output
+save(h2ab_betabin_additive,
+     file = here::here("data", "models", "h2ab_betabin_additive.RData"))
+
+# Compare full interaction and additive models
+AICtab(h2ab_betabin_full, h2ab_betabin_additive, base = TRUE)
 
 # Get the best model
-best_model <- h2a_tweedie_full_interaction
+best_split <- h2ab_betabin_full
 
-## 3.3. H2b Additive Model -----------------------------------------------------
+## 3.3. H1 presence model with full interaction  ------------------------
 
+# Do polygons differ from buffers in the probability of having any records at all?
 # Set up model
-h2b_tweedie_additive <- glmmTMB(occ_per_km2 ~ log_area_km2 + polygon_type + land_cover_name + 
-                                  (1|kommune_factor),
-                                data = model_data_complete,
-                                family = tweedie())
-
+h1_presence_full <- glmmTMB(presence ~ polygon_type * (log_area_c + land_cover_name) +
+                              (1 | kommune_factor/pair_id_factor),
+                            data   = presence_data,
+                            family = binomial)
 # Save model output
-save(h2b_tweedie_additive, file = here::here("data", "models", "h2b_tweedie_additive.RData"))
+save(h1_presence_full,
+     file = here::here("data", "models", "h1_presence_full.RData"))
 
-# 4. MODEL SUMMARY -------------------------------------------------------------
 
-## 4.1. H2a Full interaction model ---------------------------------------------
+## 3.4. H1 presence model (additive) ------------------------------------
+
+# Set up models
+h1_presence_additive <- glmmTMB(presence ~ polygon_type + log_area_c +
+                                  land_cover_name +
+                                  (1 | kommune_factor/pair_id_factor),
+                                data   = presence_data,
+                                family = binomial)
+
+# Save models
+save(h1_presence_additive,
+     file = here::here("data", "models", "h1_presence_additive.RData"))
+
+# Compare the models
+AICtab(h1_presence_full, h1_presence_additive, base = TRUE)
+
+# Use the best model
+best_presence <- h1_presence_full
+
+# 4. MODEL SUMMARIES -----------------------------------------------------------
+
+## 4.1. H2ab model -------------------------------------------------------------
 
 # Get summary
-print(summary(best_model))
+print(summary(best_split))
 
 # Create simple coefficient table
-coef_table_h2a <- broom.mixed::tidy(best_model, 
-                                    effects = "fixed",
-                                    conf.int = TRUE) |>
-  mutate(Estimate = round(estimate, 3),
-         SE = round(std.error, 3),
-         `z value` = round(statistic, 2),
-         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
+coef_table_split <- broom.mixed::tidy(best_split,
+                                      effects  = "fixed",
+                                      conf.int = TRUE) |>
+  mutate(Estimate   = round(estimate, 3),
+         SE         = round(std.error, 3),
+         `z value`  = round(statistic, 2),
+         `p value`  = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
   select(Term = term, Estimate, SE, `z value`, `p value`)
 
 # Save as CSV
-write.csv(coef_table_h2a,
-          here("figures", "Table_H2a_model1_full_interaction_coefficients.csv"),
+write.csv(coef_table_split,
+          here("figures", "Table_H2ab_split_model_coefficients.csv"),
           row.names = FALSE)
 
-## 4.2. H2b Additive model -----------------------------------------------------
+## 4.2. H1 presence model ------------------------------------------------------
 
 # Get summary
-print(summary(h2b_tweedie_additive))
+print(summary(best_presence))
 
 # Create simple coefficient table
-coef_table_h2b <- broom.mixed::tidy(h2b_tweedie_additive, 
-                                effects = "fixed",
-                                conf.int = TRUE) |>
-  mutate(Estimate = round(estimate, 3),
-         SE = round(std.error, 3),
-         `z value` = round(statistic, 2),
-         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
+coef_table_presence <- broom.mixed::tidy(best_presence,
+                                         effects  = "fixed",
+                                         conf.int = TRUE) |>
+  mutate(Estimate   = round(estimate, 3),
+         SE         = round(std.error, 3),
+         `z value`  = round(statistic, 2),
+         `p value`  = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
   select(Term = term, Estimate, SE, `z value`, `p value`)
 
 # Save as CSV
-write.csv(coef_table_h2b,
-          here("figures", "Table_H2b_model1_additive_coefficients.csv"),
+write.csv(coef_table_presence,
+          here("figures", "Table_H1_presence_model_coefficients.csv"),
           row.names = FALSE)
 
 # 5. MODEL DIAGNOSTICS WITH DHARMA ---------------------------------------------
 
-## 5.1. H2a Full interaction model ---------------------------------------------
+## 5.1. H2ab model --------................-------------------------------------
 
 # Simulate residuals
-sim_residuals_h2a <- simulateResiduals(fittedModel = best_model, 
-                                   n = 1000)
+sim_residuals_split <- simulateResiduals(fittedModel = best_split, n = 1000)
 
 # Create diagnostic plots
-png(filename = here("figures", "Figure_H2a_tweedie_diagnostics_full_interaction.png"),
+png(filename = here("figures", "Figure_H2ab_betabinomial_diagnostics.png"),
     width = 12, height = 8, units = "in", res = 300)
-plot(sim_residuals_h2a)
+plot(sim_residuals_split)
 dev.off()
 
 # Test for dispersion
-dispersion_test <- testDispersion(sim_residuals_h2a)
-print(dispersion_test)
-cat("\n")
-
-# Test for zero-inflation
-zeroinflation_test <- testZeroInflation(sim_residuals_h2a)
-print(zeroinflation_test)
-cat("\n")
+print(testDispersion(sim_residuals_split))
 
 # Test for outliers
-outlier_test <- testOutliers(sim_residuals_h2a)
-print(outlier_test)
-cat("\n")
+print(testOutliers(sim_residuals_split))
 
-## 5.2. H2b Additive model -----------------------------------------------------
+## 5.2. H1 presence model ------------------------------------------------------
 
 # Simulate residuals
-sim_residuals <- simulateResiduals(fittedModel = h2b_tweedie_additive, 
-                                   n = 1000)
+sim_residuals_presence <- simulateResiduals(fittedModel = best_presence, n = 1000)
 
 # Create diagnostic plots
-png(filename = here("figures", "Figure_H2b_tweedie_diagnostics.png"),
+png(filename = here("figures", "Figure_H1_presence_diagnostics.png"),
     width = 12, height = 8, units = "in", res = 300)
-plot(sim_residuals)
+plot(sim_residuals_presence)
 dev.off()
 
 # Test for dispersion
-dispersion_test <- testDispersion(sim_residuals)
-print(dispersion_test)
-cat("\n")
-
-# Test for zero-inflation
-zeroinflation_test <- testZeroInflation(sim_residuals)
-print(zeroinflation_test)
-cat("\n")
-
-# Test for outliers
-outlier_test <- testOutliers(sim_residuals)
-print(outlier_test)
-cat("\n")
+print(testDispersion(sim_residuals_presence))
 
 # 6. EXTRACT RANDOM EFFECTS ----------------------------------------------------
 
-## 6.1. H2a Full interaction model ---------------------------------------------
-random_effects_h2a <- VarCorr(best_model)
-print(random_effects_h2a)
+## 6.1. H2ab model -------------------------------------------------------------
+random_effects_split <- VarCorr(best_split)
+cat("\n=== H2a/H2b random effects (kommune) ===\n")
+print(random_effects_split)
+re_var_split <- as.numeric(random_effects_split$cond$kommune_factor[1])
+cat("Random effect variance (kommune):", round(re_var_split, 4), "\n")
 
-# Calculate ICC (intraclass correlation coefficient)
-re_var <- as.numeric(random_effects_h2a$cond$kommune_factor[1])
-cat("\nRandom effect variance (kommune):", round(re_var, 4), "\n")
+## 6.2. H1 presence model ------------------------------------------------------
+random_effects_presence <- VarCorr(best_presence)
+cat("\n=== H1 random effects (kommune / pair) ===\n")
+print(random_effects_presence)
 
-## 6.2. H2b Additive model -----------------------------------------------------
-random_effects <- VarCorr(h2b_tweedie_additive)
-print(random_effects)
+# 7. HYPOTHESIS TESTING --------------------------------------------------------
 
-# Calculate ICC (intraclass correlation coefficient)
-re_var <- as.numeric(random_effects$cond$kommune_factor[1])
-cat("\nRandom effect variance (kommune):", round(re_var, 4), "\n")
+## 7.1. H2a - is the polygon share of SOR above 0.5 (i.e. the intercept)?
+cat("H2a: polygons hold a greater (area-adjusted) share of paired SOR than\n")
+cat("     their buffers (share > 0.5).\n\n")
 
-# 7. EXTRACT PREDICTIONS -------------------------------------------------------
+# Get the average share over land cover; estimate is area-adjusted share
+# a value of 0.5 = no difference in density
+emm_overall <- emmeans(best_split, ~ 1, offset = 0, type = "response")
 
-## 7.1. H2a Full interaction model ---------------------------------------------
+cat("Estimated polygon share of records (averaged over land cover):\n")
+print(summary(emm_overall))
 
-# Generate predictions
-predictions_h2a <- ggpredict(best_model, 
-                             terms = c("log_area_km2 [all]", "polygon_type", "land_cover_name"),
-                             type = "fixed")
+# Get estimate and confidence interval and convert it to scales you can report
+emm_df   <- as.data.frame(emm_overall)
+pi_hat   <- emm_df$prob
+ci_lo    <- emm_df[[grep("LCL|lower", names(emm_df), value = TRUE)[1]]]
+ci_hi    <- emm_df[[grep("UCL|upper", names(emm_df), value = TRUE)[1]]]
 
-# Convert predictions to data frame
-pred_df_h2a <- as.data.frame(predictions_h2a) |>
-  rename(log_area_km2 = x, polygon_type = group, land_cover_name = facet)
+to_ratio <- function(p) p / (1 - p)
+to_index <- function(p) 2 * p - 1
 
-# Define colours for polygon types
-polygon_colours <- c("Buffer" = "#2ca02c", "Development" = "#d62728")
+cat("\n--- H2a effect size ---\n")
+cat(sprintf("Polygon share:  %.3f  [%.3f, %.3f]\n", pi_hat, ci_lo, ci_hi))
+cat(sprintf("Polygon:buffer ratio:  %.3f  [%.3f, %.3f]\n",
+            to_ratio(pi_hat), to_ratio(ci_lo), to_ratio(ci_hi)))
+cat(sprintf("Symmetric index (2p-1): %.3f  [%.3f, %.3f]\n",
+            to_index(pi_hat), to_index(ci_lo), to_index(ci_hi)))
 
-# Plot the predictions (faceted by land-cover)
-fig_h2a_predictions <- ggplot(pred_df_h2a, aes(x = log_area_km2, y = predicted,
-                                               color = polygon_type, fill = polygon_type)) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, color = NA) +
-  geom_line(linewidth = 1.2) +
+if (ci_lo > 0.5) {
+  cat("\nH2a SUPPORTED: the CI for the polygon share lies entirely above 0.5.\n")
+} else if (ci_hi < 0.5) {
+  cat("\nH2a NOT supported: the share lies below 0.5 (buffers hold more).\n")
+} else {
+  cat("\nH2a inconclusive: the CI for the polygon share includes 0.5.\n")
+}
+
+## 7.2. H2b - does the share of SOR increase with area? -----------------------
+
+cat("H2b: SOR rises with area faster inside polygons than outside.\n")
+cat("     In the paired model this is the effect of area on the polygon's\n")
+cat("     share: a POSITIVE log_area_c slope means the polygon pulls ahead of\n")
+cat("     its buffer as pairs get larger.\n\n")
+
+# Get the average area slope of the share, across land-cover
+slope_overall <- emtrends(best_split, ~ 1, var = "log_area_c")
+cat("Average effect of log(area) on the polygon share (logit scale):\n")
+print(summary(slope_overall))
+
+# Extract slope confidence intervals
+slope_df  <- as.data.frame(slope_overall)
+trend_col <- grep("trend", names(slope_df), value = TRUE)[1]
+slo_lo    <- slope_df[[grep("LCL|lower", names(slope_df), value = TRUE)[1]]]
+slo_hi    <- slope_df[[grep("UCL|upper", names(slope_df), value = TRUE)[1]]]
+slo_est   <- slope_df[[trend_col]]
+
+cat(sprintf("\nArea slope: %.3f  [%.3f, %.3f]\n", slo_est, slo_lo, slo_hi))
+if (slo_lo > 0) {
+  cat("H2b SUPPORTED: the share increases with area (slope CI entirely > 0).\n")
+} else if (slo_hi < 0) {
+  cat("H2b NOT supported: the share DECREASES with area (buffer pulls ahead).\n")
+} else {
+  cat("H2b inconclusive: the area slope CI includes 0.\n")
+}
+
+# Get area slope per land-cover
+slope_landcover <- emtrends(best_split, ~ land_cover_name, var = "log_area_c")
+cat("\nArea slope of the share by land cover (logit scale):\n")
+print(summary(slope_landcover))
+
+# Save slopes to file
+write.csv(as.data.frame(slope_landcover),
+          here("figures", "Table_H2b_area_slope_by_landcover.csv"),
+          row.names = FALSE)
+
+## 7.3. DOes the split of SOR depend on land-cover? ----------------------------
+
+cat("\n=== LRT for the area x land cover interaction (split model) ===\n")
+lrt_split <- anova(h2ab_betabin_additive, h2ab_betabin_full)
+print(lrt_split)
+
+
+## 7.4. h2a share by lan-cover -------------------------------------------------
+
+# Extract emmeans
+emm_landcover <- emmeans(best_split, ~ land_cover_name, offset = 0, type = "response")
+
+# Get a summary
+cat("\n=== Estimated polygon share by land cover ===\n")
+print(summary(emm_landcover))
+
+# Convert to df
+landcover_df <- as.data.frame(emm_landcover)
+
+# Save output to file
+write.csv(landcover_df,
+          here("figures", "Table_H2a_share_by_landcover.csv"),
+          row.names = FALSE)
+
+# Save the model results for later
+saveRDS(list(h2a_overall_share = emm_overall,
+             h2a_share_by_lc = emm_landcover,
+             h2b_area_slope = slope_overall,
+             h2b_slope_by_lc = slope_landcover,
+             lrt_interaction = lrt_split),
+        here("data", "models", "h2ab_betabin_inference.rds"))
+
+## 7.5. H1 - development polygon less likely to be empty than the buffer -------
+
+cat("H1: development polygons are better surveyed - i.e. LESS likely to hold\n")
+cat("    zero records than their paired buffers.\n\n")
+
+# Get the probability of presence for polygons and buffer averaged over area and land-cover
+emm_presence <- emmeans(best_presence, ~ polygon_type, type = "response")
+cat("Probability a unit holds any records, by side:\n")
+print(summary(emm_presence))
+
+# Compare development polygons vs buffers as an odds ratio
+contrast_presence <- contrast(emm_presence, method = "revpairwise", type = "response")
+cat("\nDevelopment vs Buffer (odds ratio for holding any records):\n")
+print(summary(contrast_presence))
+
+# Get the odds-ratio CI
+con_df <- as.data.frame(contrast_presence)
+or_col <- grep("odds.ratio|ratio", names(con_df), value = TRUE)[1]
+or_lo  <- con_df[[grep("LCL|lower", names(con_df), value = TRUE)[1]]]
+or_hi  <- con_df[[grep("UCL|upper", names(con_df), value = TRUE)[1]]]
+or_est <- con_df[[or_col]]
+
+cat(sprintf("\nOdds ratio (Development / Buffer): %.3f  [%.3f, %.3f]\n",
+            or_est, or_lo, or_hi))
+if (or_lo > 1) {
+  cat("H1 SUPPORTED: development polygons are more likely to hold records\n")
+  cat("   (less likely to be empty) than their buffers (OR CI entirely > 1).\n")
+} else if (or_hi < 1) {
+  cat("H1 NOT supported: development polygons are MORE likely to be empty.\n")
+} else {
+  cat("H1 inconclusive: the odds-ratio CI includes 1.\n")
+}
+
+# Save H1 output
+saveRDS(list(presence_by_side = emm_presence,
+             dev_vs_buffer    = contrast_presence),
+        here("data", "models", "h1_presence_inference.rds"))
+
+# 8. PREDICTION FIGURES --------------------------------------------------------
+
+## 8.1. H2ab - predicted share of SOR by area and land-cover -------------------
+
+# Predict values
+predictions_split <- ggpredict(best_split,
+                               terms     = c("log_area_c [all]", "land_cover_name"),
+                               condition = c(area_offset = 0))
+
+# Convert to df
+pred_df_split <- as.data.frame(predictions_split) |>
+  rename(log_area_c = x, land_cover_name = group)
+
+# Clip each facet to the log-area range observed in the land-cover (i.e. do not predict beyond the range of log(area) values for that specific land-cover)
+lc_ranges_split <- pair_records |>
+  group_by(land_cover_name) |>
+  summarise(lo = min(log_area_c), hi = max(log_area_c), .groups = "drop")
+
+pred_df_split <- pred_df_split |>
+  left_join(lc_ranges_split, by = "land_cover_name") |>
+  filter(log_area_c >= lo, log_area_c <= hi) |>
+  select(-lo, -hi)
+
+fig_split_predictions <- ggplot(pred_df_split,
+                                aes(x = log_area_c, y = predicted)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed",
+             colour = "grey40", linewidth = 0.5) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+              fill = "#d62728", alpha = 0.2) +
+  geom_line(colour = "#d62728", linewidth = 1.2) +
   facet_wrap(~land_cover_name, scales = "free_y", ncol = 3) +
-  scale_color_manual(values = polygon_colours, name = "Area type") +
-  scale_fill_manual(values = polygon_colours, name = "Area type") +
-  labs(x = expression(paste("Log(Area (km"^2, "))")),
-       y = expression(paste("Predicted occurrences per km"^2))) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Centred log(polygon area)",
+       y = "Predicted share of records within the development polygon") +
+  theme_classic() +
+  theme(panel.grid       = element_blank(),
+        axis.title       = element_text(size = 16),
+        axis.text        = element_text(size = 14),
+        strip.background  = element_rect(fill = "grey90", colour = "black"),
+        strip.text       = element_text(size = 14, face = "bold"))
+
+# Save figure to file
+ggsave(filename = here("figures", "Figure_H2ab_predicted_share_by_landcover.png"),
+       plot = fig_split_predictions, width = 14, height = 10, dpi = 600)
+ggsave(filename = here("figures", "Figure_H2ab_predicted_share_by_landcover.pdf"),
+       plot = fig_split_predictions, width = 14, height = 10, dpi = 600)
+
+## 8.2. H2a - estimated share of SOR by land-cover -----------------------------
+
+# Convert to df 
+landcover_plot_df <- landcover_df |>
+  rename(share = prob) |>
+  rename(conf.low  = grep("LCL|lower", names(landcover_df), value = TRUE)[1],
+         conf.high = grep("UCL|upper", names(landcover_df), value = TRUE)[1])
+
+# Plot figure
+fig_h2a_landcover <- ggplot(landcover_plot_df,
+                            aes(x = reorder(land_cover_name, share),
+                                y = share)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed",
+             colour = "grey40", linewidth = 0.5) +
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
+                  colour = "#d62728", linewidth = 0.8, size = 0.6) +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  labs(x = "Land cover",
+       y = "Estimated share of records within the development polygon") +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 16),
-        axis.text = element_text(size = 14),
-        strip.background = element_rect(fill = "grey90", color = "black"),
-        strip.text = element_text(size = 14, face = "bold"),
-        legend.position = "right",
-        legend.title = element_text(size = 16),
-        legend.text = element_text(size = 14))
+        axis.title = element_text(size = 14),
+        axis.text  = element_text(size = 12))
 
-# Save H2a prediction figure
-ggsave(filename = here("figures", "Figure_H2a_full_interaction_predictions_by_landcover.png"),
-       plot = fig_h2a_predictions, width = 14, height = 10, dpi = 600)
+# Save figure to file
+ggsave(filename = here("figures", "Figure_H2a_share_by_landcover_pointrange.png"),
+       plot = fig_h2a_landcover, width = 10, height = 7, dpi = 600)
+ggsave(filename = here("figures", "Figure_H2a_share_by_landcover_pointrange.pdf"),
+       plot = fig_h2a_landcover, width = 10, height = 7, dpi = 600)
 
-ggsave(filename = here("figures", "Figure_H2a_full_interaction_predictions_by_landcover.pdf"),
-       plot = fig_h2a_predictions, width = 14, height = 10, dpi = 600)
+## 8.3. H2b - area slope by land-cover -----------------------------------------
 
+# Get df
+slope_lc_df <- as.data.frame(slope_landcover)
+slope_plot_df <- slope_lc_df |>
+  rename(slope     = grep("trend", names(slope_lc_df), value = TRUE)[1],
+         conf.low  = grep("LCL|lower", names(slope_lc_df), value = TRUE)[1],
+         conf.high = grep("UCL|upper", names(slope_lc_df), value = TRUE)[1])
 
-## 7.2. H2b Additive model -----------------------------------------------------
-
-# Generate predictions across the range of observed areas for each combination
-# of polygon type and land cover
-predictions_h2b <- ggpredict(h2b_tweedie_additive, 
-                             terms = c("log_area_km2 [all]", "polygon_type", "land_cover_name"),
-                             type = "fixed")
-
-# Convert predictions to data frame
-pred_df_h2b <- as.data.frame(predictions_h2b) |>
-  rename(log_area_km2 = x, polygon_type = group, land_cover_name = facet)
-
-# Plot the predictions (faceted by land-cover)
-fig_h2b_predictions <- ggplot(pred_df_h2b, aes(x = log_area_km2, y = predicted,
-                                           color = polygon_type, fill = polygon_type)) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, color = NA) +
-  geom_line(linewidth = 1.2) +
-  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3) +
-  scale_color_manual(values = polygon_colours, name = "Area type") +
-  scale_fill_manual(values = polygon_colours, name = "Area type") +
-  labs(x = expression(paste("Log(Area (km"^2, "))")),
-       y = expression(paste("Predicted occurrences per km"^2))) +
+# Plot figure
+fig_h2b_slope <- ggplot(slope_plot_df,
+                        aes(x = reorder(land_cover_name, slope), y = slope)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             colour = "grey40", linewidth = 0.5) +
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
+                  colour = "#1f77b4", linewidth = 0.8, size = 0.6) +
+  coord_flip() +
+  labs(x = "Land cover",
+       y = "Effect of log(area) on polygon share (logit-scale slope)") +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 16),
-        axis.text = element_text(size = 14),
-        strip.background = element_rect(fill = "grey90", color = "black"),
-        strip.text = element_text(size = 14, face = "bold"),
-        legend.position = "right",
-        legend.title = element_text(size = 16),
-        legend.text = element_text(size = 14))
+        axis.title = element_text(size = 14),
+        axis.text  = element_text(size = 12))
 
-# Save main prediction figure
-ggsave(filename = here("figures", "Figure_H2b_additive_tweedie_predictions_by_landcover.png"),
-       plot = fig_h2b_predictions, width = 14, height = 10, dpi = 600)
+# Save figure to file 
+ggsave(filename = here("figures", "Figure_H2b_area_slope_by_landcover.png"),
+       plot = fig_h2b_slope, width = 10, height = 7, dpi = 600)
+ggsave(filename = here("figures", "Figure_H2b_area_slope_by_landcover.pdf"),
+       plot = fig_h2b_slope, width = 10, height = 7, dpi = 600)
 
-ggsave(filename = here("figures", "Figure_H2b_additive_tweedie_predictions_by_landcover.pdf"),
-       plot = fig_h2b_predictions, width = 14, height = 10, dpi = 600)
+## 8.4. H1 - probability of SOR presence by land-cover -------------------------
 
-# 8. CALCULATE EFFECT SIZES ----------------------------------------------------
+# Get per-side presence probability for development vs buffer within land-cover
+predictions_presence <- ggpredict(best_presence,
+                                  terms = c("log_area_c [all]", "polygon_type",
+                                            "land_cover_name"))
 
-## 8.1. H2a Full interaction model ---------------------------------------------
+# Get df
+pred_df_presence <- as.data.frame(predictions_presence) |>
+  rename(log_area_c = x, polygon_type = group, land_cover_name = facet)
 
-# Get marginal means for polygon type (averaged across land cover and area)
-emmeans_polygon_h2a <- emmeans(h2a_tweedie_full_interaction, 
-                               specs = "polygon_type",
-                               type = "response")
-print(summary(emmeans_polygon_h2a))
+# CLip each land-cover by side to its own observed log-area range
+lc_ranges_presence <- presence_data |>
+  group_by(land_cover_name, polygon_type) |>
+  summarise(lo = min(log_area_c), hi = max(log_area_c), .groups = "drop")
 
-# Calculate pairwise contrast (Buffer vs Development)
-contrast_polygon_h2a <- contrast(emmeans_polygon_h2a, method = "pairwise", type = "response")
-print(summary(contrast_polygon_h2a))
+# Add to df
+pred_df_presence <- pred_df_presence |>
+  left_join(lc_ranges_presence, by = c("land_cover_name", "polygon_type")) |>
+  filter(log_area_c >= lo, log_area_c <= hi) |>
+  select(-lo, -hi)
 
-## 8.2. H2b Additive model -----------------------------------------------------
+# Set colours
+polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
 
-# Get marginal means for polygon type
-emmeans_polygon_h2b <- emmeans(h2b_tweedie_additive, 
-                               specs = "polygon_type",
-                               type = "response")
-print(summary(emmeans_polygon_h2b))
+# Create figure
+fig_presence_predictions <- ggplot(pred_df_presence,
+                                   aes(x = log_area_c, y = predicted,
+                                       colour = polygon_type, fill = polygon_type)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3) +
+  scale_colour_manual(values = polygon_colours, name = "Area type") +
+  scale_fill_manual(values = polygon_colours, name = "Area type") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Centred log(area)",
+       y = "Probability a unit holds any occurrence records") +
+  theme_classic() +
+  theme(panel.grid       = element_blank(),
+        axis.title       = element_text(size = 16),
+        axis.text        = element_text(size = 14),
+        strip.background  = element_rect(fill = "grey90", colour = "black"),
+        strip.text       = element_text(size = 14, face = "bold"),
+        legend.position  = "right",
+        legend.title     = element_text(size = 16),
+        legend.text      = element_text(size = 14))
 
-# Calculate pairwise contrast
-contrast_polygon_h2b <- contrast(emmeans_polygon_h2b, method = "pairwise", type = "response")
-print(summary(contrast_polygon_h2b))
-
-# Save emmeans results for both models
-saveRDS(list(h2a_polygon_type = emmeans_polygon_h2a,
-             h2a_contrast = contrast_polygon_h2a,
-             h2b_polygon_type = emmeans_polygon_h2b,
-             h2b_contrast = contrast_polygon_h2b),
-        here("data", "models", "h2ab_tweedie_emmeans.rds"))
+# Save figure to file
+ggsave(filename = here("figures", "Figure_H1_presence_by_side_and_landcover.png"),
+       plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
+ggsave(filename = here("figures", "Figure_H1_presence_by_side_and_landcover.pdf"),
+       plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
 
 # END OF SCRIPT ----------------------------------------------------------------
