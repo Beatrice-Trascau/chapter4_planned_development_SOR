@@ -10,34 +10,72 @@
 library(here)
 source(here("scripts", "0_setup.R"))
 
+# Make sure there is a directory in which to save the model outputs
+if (!dir.exists(here("data", "models"))) {
+  dir.create(here("data", "models"), recursive = TRUE)
+}
+
 # Load polygons data
 model_data <- readRDS(here("data", "derived_data", "h2_polygon_buffer_data.rds"))
 
+# Quickly inspect the data that was loaded
+cat("Rows loaded:", nrow(model_data), "\n") # 259762 (2 per pair)
+print(table(model_data$polygon_type))
+
 # 2. PREPARE DATA FOR MODELING -------------------------------------------------
 
-# Remove orphaned buffers
-dev_ids <- model_data |> filter(polygon_type == "Development") |> pull(id)
-model_data <- model_data |> filter(id %in% dev_ids)
+## 2.1. Reshape df to one row per polygon-buffer pair --------------------------
 
-# Calculate occurrence density (occurrences per km²)
-model_data_complete <- model_data |>
-  mutate(polygon_type    = factor(polygon_type, levels = c("Buffer", "Development")),
-         land_cover_name = factor(land_cover_name),
-         kommune_factor  = factor(kommune),
-         # convert area to km²
-         area_km2        = area_m2_numeric / 1e6,
-         # calculate occurrence density (occurrences per km²)
-         occ_per_km2     = n_occurrences / area_km2,
-         # log-transform area in km² for model (consistent units)
-         log_area_km2    = log(area_km2))
+# Pivot from long to wide and have the polygon and buffer counts side by side
+pair_data <- model_data |>
+  select(pair_id, kommune, english_categories, land_cover_name,
+         area_m2_numeric, polygon_type, n_occurrences) |>
+  tidyr::pivot_wider(names_from  = polygon_type,
+                     values_from = c(n_occurrences, area_m2_numeric)) |>
+  rename(sor_polygon  = n_occurrences_Development,
+         sor_buffer   = n_occurrences_Buffer,
+         area_polygon = area_m2_numeric_Development,
+         area_buffer  = area_m2_numeric_Buffer)
 
-# Check the distribution of the response variable
-cat("\n=== Response Variable Summary ===\n")
-cat("Occurrence density (occ_per_km2):\n")
-print(summary(model_data_complete$occ_per_km2))
-cat("\nProportion of zeros:", mean(model_data_complete$occ_per_km2 == 0), "\n")
-cat("Number of zeros:", sum(model_data_complete$occ_per_km2 == 0), "\n")
-cat("Number of non-zeros:", sum(model_data_complete$occ_per_km2 > 0), "\n\n")
+# Create variables needed for the model
+pair_data <- pair_data |>
+  mutate(sor_total = sor_polygon + sor_buffer,
+         # calculate the share of the SOR belonging to the polygons
+         share_polygon   = ifelse(sor_total > 0, sor_polygon / sor_total, NA_real_),
+         # calculate a centered log polygon area so that the intercept in H2a refers to a pair of average size
+         log_area_c = as.numeric(scale(log(area_polygon), scale = FALSE)),
+         # calcualte and area offset to use in H2a to deal with the pairs where the buffer is larger
+         area_offset = log(area_polygon / area_buffer),
+         # did this pair have any records at all? (response for the H1 model)
+         any_records = as.integer(sor_total > 0),
+         # factorise kommune and land-cover name
+         kommune_factor = factor(kommune),
+         land_cover_name = factor(land_cover_name))
+
+## 2.2. Check the reshaped df --------------------------------------------------
+
+# Check we have exactly one row per pair
+stopifnot(nrow(pair_data) == n_distinct(model_data$pair_id))
+cat("\nPairs after reshape:", nrow(pair_data), "\n")
+
+# Check that we did not introduce NAs in the counts and that we have finit values everywhere
+stopifnot(!any(is.na(pair_data$sor_polygon)),
+          !any(is.na(pair_data$sor_buffer)),
+          all(is.finite(pair_data$area_offset)),
+          all(is.finite(pair_data$log_area_c)))
+cat("PASS: counts complete and offset/area finite\n")
+
+# Quick glance at the response variable
+cat("Pairs with any records:", sum(pair_data$any_records), "of",
+    nrow(pair_data), "(",
+    round(100 * mean(pair_data$any_records), 1), "%)\n")
+cat("Pairs with zero records in BOTH halves:", sum(pair_data$sor_total == 0), "\n")
+cat("Polygon share of records (record-bearing pairs only):\n")
+print(summary(pair_data$share_polygon))
+
+# Check that the area offset sits near 0 for most pairs
+cat("\nArea offset log(area_polygon/area_buffer) summary:\n")
+print(summary(pair_data$area_offset))
 
 # 3. FIT MODELS ----------------------------------------------------------------
 
