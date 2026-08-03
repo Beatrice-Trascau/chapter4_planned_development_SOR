@@ -66,6 +66,9 @@ save(h2c_nbinom_additive,
 
 # Compare models
 AICtab(h2c_nbinom_full, h2c_nbinom_additive, base = TRUE)
+#                     AIC      dAIC     df
+# h2c_nbinom_full     288591.3      0.0 19
+# h2c_nbinom_additive 288771.7    180.4 12
 
 # Use the better model
 best_model_h2c <- h2c_nbinom_full
@@ -197,59 +200,59 @@ saveRDS(list(richness_by_side = emmeans_polygon_h2c,
 
 # 8. PREDICTION FIGURES --------------------------------------------------------
 
-# Function to help display names neatly
+# Use a function to display land-cover names properly
 pretty_lc <- function(x) {
   x <- gsub("_", " ", x)
   gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
 }
 
-# Define colours for polygons and buffers
+# Define colour pallette
 polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
 
-# Predict richness across area, faceted by land-cover
-predictions_h2c <- ggpredict(best_model_h2c,
-                             terms = c("log_area_c [n=100]", "polygon_type",
-                                       "land_cover_name"),
-                             type  = "fixed")
+# Predict species richness across area and predict each land-cover over its own observed log-area range
+predict_within_lc_range <- function(model, data, n = 100) {
+  lcs <- levels(droplevels(factor(data$land_cover_name)))
+  preds <- lapply(lcs, function(lc) {
+    rng      <- range(data$log_area_c[data$land_cover_name == lc], na.rm = TRUE)
+    seq_vals <- round(seq(rng[1], rng[2], length.out = n), 5)
+    term_str <- paste0("log_area_c [", paste(seq_vals, collapse = ","), "]")
+    ggpredict(model,
+              terms = c(term_str, "polygon_type"),
+              condition = c(land_cover_name = lc),
+              type = "fixed") |>
+      as.data.frame() |>
+      rename(log_area_c = x, polygon_type = group) |>
+      mutate(land_cover_name = lc)
+  })
+  bind_rows(preds)
+}
 
-# Convert to df
-pred_df_h2c <- as.data.frame(predictions_h2c) |>
-  rename(log_area_c = x, polygon_type = group, land_cover_name = facet)
+# Use the function defined above to predict the values
+pred_df_h2c <- predict_within_lc_range(best_model_h2c, richness_data)
 
-# Clip each land-cover x side to its own observed log-area range
-lc_ranges_h2c <- richness_data |>
-  group_by(land_cover_name, polygon_type) |>
-  summarise(lo = min(log_area_c), hi = max(log_area_c), .groups = "drop")
+# Create the figure
+(fig_h2c_predictions <- ggplot(pred_df_h2c,
+                               aes(x = log_area_c, y = predicted,
+                                   colour = polygon_type, fill = polygon_type)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+    geom_line(linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_colour_manual(values = polygon_colours, name = "Area type") +
+    scale_fill_manual(values = polygon_colours, name = "Area type") +
+    labs(x = expression(paste("log(Area (m"^2, "))")),
+         y = "Predicted Species Richness") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold"),
+          legend.position = "right",
+          legend.title = element_text(size = 16),
+          legend.text = element_text(size = 14)))
 
-# Join data
-pred_df_h2c <- pred_df_h2c |>
-  left_join(lc_ranges_h2c, by = c("land_cover_name", "polygon_type")) |>
-  filter(log_area_c >= lo, log_area_c <= hi) |>
-  select(-lo, -hi)
-
-# Plot prediciton figure
-fig_h2c_predictions <- ggplot(pred_df_h2c,
-                              aes(x = log_area_c, y = predicted,
-                                  colour = polygon_type, fill = polygon_type)) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
-  geom_line(linewidth = 1.2) +
-  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
-             labeller = as_labeller(pretty_lc)) +
-  scale_colour_manual(values = polygon_colours, name = "Area type") +
-  scale_fill_manual(values = polygon_colours, name = "Area type") +
-  labs(x = expression(paste("log(Area) [m"^2, "]")),
-       y = "Predicted Species Richness") +
-  theme_classic() +
-  theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 16),
-        axis.text = element_text(size = 14),
-        strip.background = element_rect(fill = "grey90", colour = "black"),
-        strip.text = element_text(size = 14, face = "bold"),
-        legend.position  = "right",
-        legend.title = element_text(size = 16),
-        legend.text = element_text(size = 14))
-
-# Save figures to file
+# Save figure to file
 ggsave(filename = here("figures", "Figure_H2c_richness_by_side_and_landcover.png"),
        plot = fig_h2c_predictions, width = 14, height = 10, dpi = 600)
 ggsave(filename = here("figures", "Figure_H2c_richness_by_side_and_landcover.pdf"),
