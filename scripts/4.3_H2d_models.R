@@ -3,6 +3,11 @@
 # 4.3_H2d_models
 # This script contains code to test Hypothesis 2d: Area plan polygons will 
 # have higher sampling completeness than areas outside of planned developments
+
+# NB ON CHAO1: Chao1 treats occurrence counts per species as abundances
+# (singltons/doubletons = species with 1 or 2 GBIF records)
+# This is not true abundance so Chao2/ICE which are based on years and events
+# tend to be better suited.
 ##----------------------------------------------------------------------------##
 
 # 1. LOAD DATA -----------------------------------------------------------------
