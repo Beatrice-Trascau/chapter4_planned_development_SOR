@@ -212,21 +212,25 @@ model_data_ice_time <- completeness_data |>
          completeness_ice_time > 0, completeness_ice_time <= 1)
 
 cat("Data after filtering:\n")
-cat("  Chao1 model:    ", nrow(model_data_chao1),    "sides\n")
-cat("  ICE-time model: ", nrow(model_data_ice_time), "sides\n\n")
+cat("  Chao1 model:    ", nrow(model_data_chao1),    "sides\n") #7270
+cat("  ICE-time model: ", nrow(model_data_ice_time), "sides\n\n") #5623
 
 # Check how many complete polygon-buffer pairs qualify
 cat("Qualifying sides by type (Chao1):\n")
 print(table(model_data_chao1$polygon_type))
 complete_pairs_chao1 <- model_data_chao1 |>
   count(pair_id) |> filter(n == 2) |> nrow()
-cat("Complete PAIRS (both sides qualify), Chao1:", complete_pairs_chao1, "\n\n")
+# Buffer Development 
+# 4166        3104
+cat("Complete PAIRS (both sides qualify), Chao1:", complete_pairs_chao1, "\n\n") #1438 
 
 cat("Qualifying sides by type (ICE-time):\n")
 print(table(model_data_ice_time$polygon_type))
+# Buffer Development 
+# 3404        2219 
 complete_pairs_ice <- model_data_ice_time |>
   count(pair_id) |> filter(n == 2) |> nrow()
-cat("Complete PAIRS (both sides qualify), ICE-time:", complete_pairs_ice, "\n\n")
+cat("Complete PAIRS (both sides qualify), ICE-time:", complete_pairs_ice, "\n\n") #1077
 
 # Save the completeness data
 saveRDS(completeness_data,
@@ -260,10 +264,62 @@ h2d_chao1_model2_interaction <- glmmTMB(completeness_chao1 ~ polygon_type * log_
 save(h2d_chao1_model2_interaction,
      file = here::here("data", "models", "h2d_chao1_model2_interaction.RData"))
 
-# Compare models
-AICtab(h2d_chao1_model1_additive, h2d_chao1_model2_interaction, base = TRUE)
+## 6.3. Chao1 additive with dispersion model -----------------------------------
 
-## 6.3. ICE time additive ------------------------------------------------------
+# Define model
+h2d_chao1_model3_disp <- glmmTMB(completeness_chao1 ~ polygon_type + log_area_km2 +
+                                   land_cover_name + log(n_occurrences_total) +
+                                   (1 | kommune_factor/pair_id_factor),
+                                 dispformula = ~ log(n_occurrences_total),
+                                 data   = model_data_chao1,
+                                 family = ordbeta(link = "logit"))
+
+# Save output
+save(h2d_chao1_model3_disp,
+     file = here::here("data", "models", "h2d_chao1_model3_disp.RData"))
+
+# Compare models
+AICtab(h2d_chao1_model1_additive, h2d_chao1_model2_interaction,
+       h2d_chao1_model3_disp, base = TRUE)
+#                             AIC     dAIC    df
+# h2d_chao1_model3_disp        -5390.6     0.0 16
+# h2d_chao1_model1_additive    -5363.1    27.5 15
+# h2d_chao1_model2_interaction -5359.0    31.6 22
+
+## 6.4. Chao1 dispersion and nonlinear effort with stricter thresholds ---------
+
+# Set up sticter thresholds
+min_species_strict     <- 10
+min_occurrences_strict <- 30
+
+# Filter data with the stricter filtering
+# N.B! We are filtering the data, so we cannot compare the AIC of this model to the AIC of the others
+model_data_chao1_strict <- completeness_data |>
+  filter(n_species >= min_species_strict,
+         n_occurrences >= min_occurrences_strict,
+         !is.na(completeness_chao1), !is.infinite(completeness_chao1),
+         completeness_chao1 > 0, completeness_chao1 <= 1)
+
+# Chck how many pairs are left
+cat("\nChao1 strict-threshold sides:", nrow(model_data_chao1_strict),
+    "(vs", nrow(model_data_chao1), "at the original thresholds)\n") # 2977 (vs 7270 at the original thresholds)
+print(table(model_data_chao1_strict$polygon_type))
+# Buffer Development 
+# 1689        1288 
+
+# Define model
+h2d_chao1_model4_disp_poly <- glmmTMB(completeness_chao1 ~ polygon_type + log_area_km2 +
+                                        land_cover_name + poly(log(n_occurrences_total), 2) +
+                                        (1 | kommune_factor/pair_id_factor),
+                                      dispformula = ~ log(n_occurrences_total),
+                                      data   = model_data_chao1_strict,
+                                      family = ordbeta(link = "logit"))
+
+# Save model output
+save(h2d_chao1_model4_disp_poly,
+     file = here::here("data", "models", "h2d_chao1_model4_disp_poly.RData"))
+
+## 6.5. ICE time additive ------------------------------------------------------
 
 # Define model
 h2d_ice_time_model1 <- glmmTMB(completeness_ice_time ~ polygon_type + log_area_km2 +
@@ -276,7 +332,7 @@ h2d_ice_time_model1 <- glmmTMB(completeness_ice_time ~ polygon_type + log_area_k
 save(h2d_ice_time_model1,
      file = here::here("data", "models", "h2d_ice_time_model1.RData"))
 
-## 6.4. ICE time interactive ---------------------------------------------------
+## 6.6. ICE time interactive ---------------------------------------------------
 
 # Define model
 h2d_ice_time_model2 <- glmmTMB(completeness_ice_time ~ polygon_type * log_area_km2 *
@@ -291,6 +347,9 @@ save(h2d_ice_time_model2,
 
 # Compare models
 AICtab(h2d_ice_time_model1, h2d_ice_time_model2, base = TRUE)
+#                     AIC    dAIC   df
+# h2d_ice_time_model1 3618.1    0.0 15
+# h2d_ice_time_model2 3625.3    7.2 34
 
 # 7. MODEL SUMMARY -------------------------------------------------------------
 
@@ -368,7 +427,43 @@ print(testDispersion(sim_residuals_h2d_chao1))
 # Test for outliers
 print(testOutliers(sim_residuals_h2d_chao1))
 
-## 8.2. ICE time additive ------------------------------------------------------
+## 8.2. Chao1 with dispersion model --------------------------------------------
+
+# Simulate residuals
+sim_residuals_h2d_chao1_disp <- simulateResiduals(fittedModel = h2d_chao1_model3_disp,
+                                                  n = 1000)
+
+# Create diagnostic plots
+png(filename = here("figures", "Figure_H2d_Chao1_dispmodel_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_h2d_chao1_disp)
+dev.off()
+
+# Test for dispersion
+print(testDispersion(sim_residuals_h2d_chao1_disp))
+
+# Test for outliers
+print(testOutliers(sim_residuals_h2d_chao1_disp))
+
+## 8.3. Chao1 with nonlinear effort and stricter thresholds --------------------
+
+# Simulate residuals
+sim_residuals_h2d_chao1_disp_poly <- simulateResiduals(fittedModel = h2d_chao1_model4_disp_poly,
+                                                       n = 1000)
+
+# Plot diagnostics
+png(filename = here("figures", "Figure_H2d_Chao1_disp_poly_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_h2d_chao1_disp_poly)
+dev.off()
+
+# Test dispersion
+print(testDispersion(sim_residuals_h2d_chao1_disp_poly))
+
+# Test outliers
+print(testOutliers(sim_residuals_h2d_chao1_disp_poly))
+
+## 8.4. ICE time additive ------------------------------------------------------
 
 # Simulate residuals
 sim_residuals_h2d_ice <- simulateResiduals(fittedModel = h2d_ice_time_model1,
@@ -430,10 +525,10 @@ completeness_figure <- function(pred_df) {
           strip.text = element_text(size = 12, face = "bold"))
 }
 
-## 9.1. Chao1 additive model ---------------------------------------------------
+## 9.1. Chao1 stricter model ---------------------------------------------------
 
 # Get predictions for area × polygon type × land cover
-pred_df_chao1 <- make_pred_df(h2d_chao1_model1_additive, model_data_chao1)
+pred_df_chao1 <- make_pred_df(h2d_chao1_model4_disp_poly, model_data_chao1_strict)
 
 # Main plot: Area × Polygon Type, faceted by Land Cover
 fig_chao1_predictions <- completeness_figure(pred_df_chao1)
@@ -460,19 +555,24 @@ ggsave(filename = here("figures", "Figure_H2d_ICE_predictions.pdf"),
 
 # 10. HYPOTHESIS TESTING -------------------------------------------------------
 
-## 10.1. Chao1 additive model --------------------------------------------------
+## 10.1. Chao1 stricter model --------------------------------------------------
 
 # Get marginal means for polygon type (averaged across land cover and area)
-emmeans_polygon_h2d_chao1 <- emmeans(h2d_chao1_model1_additive,
+emmeans_polygon_h2d_chao1 <- emmeans(h2d_chao1_model4_disp_poly,
                                      specs = "polygon_type", type = "response")
 cat("Estimated completeness by side (Chao1):\n")
 print(summary(emmeans_polygon_h2d_chao1))
+# polygon_type response     SE  df asymp.LCL asymp.UCL
+# Buffer          0.552 0.0106 Inf     0.531     0.573
+# Development     0.561 0.0109 Inf     0.540     0.582
 
 # Calculate pairwise contrast
 contrast_polygon_h2d_chao1 <- contrast(emmeans_polygon_h2d_chao1,
                                        method = "revpairwise", type = "response")
 cat("\nDevelopment vs Buffer (Chao1 completeness):\n")
 print(summary(contrast_polygon_h2d_chao1, infer = TRUE))
+# contrast             odds.ratio     SE  df asymp.LCL asymp.UCL null z.ratio p.value
+# Development / Buffer       1.04 0.0315 Inf     0.978       1.1    1   1.215  0.2244
 
 ## 10.2. ICE time additive -----------------------------------------------------
 
@@ -481,12 +581,17 @@ emmeans_polygon_h2d_ice <- emmeans(h2d_ice_time_model1,
                                    specs = "polygon_type", type = "response")
 cat("\nEstimated completeness by side (ICE-time):\n")
 print(summary(emmeans_polygon_h2d_ice))
+# polygon_type response      SE  df asymp.LCL asymp.UCL
+# Buffer          0.210 0.00671 Inf     0.197     0.223
+# Development     0.217 0.00759 Inf     0.202     0.232
 
 # Calculate pairwise contrast
 contrast_polygon_h2d_ice <- contrast(emmeans_polygon_h2d_ice,
                                      method = "revpairwise", type = "response")
 cat("\nDevelopment vs Buffer (ICE-time completeness):\n")
 print(summary(contrast_polygon_h2d_ice, infer = TRUE))
+# contrast             odds.ratio     SE  df asymp.LCL asymp.UCL null z.ratio p.value
+# Development / Buffer       1.04 0.0318 Inf     0.981      1.11    1   1.325  0.1853
 
 # Save inference objects
 saveRDS(list(chao1_by_side  = emmeans_polygon_h2d_chao1,
