@@ -33,15 +33,19 @@ model_data <- model_data |>
          !is.na(kommune_factor))
 
 # Quick summary of the data
-cat("Development polygons:", nrow(model_data), "\n")
-cat("Municipalities:", n_distinct(model_data$kommune_factor), "\n")
-cat("Development categories:", nlevels(model_data$english_categories), "\n")
+cat("Development polygons:", nrow(model_data), "\n") #129881
+cat("Municipalities:", n_distinct(model_data$kommune_factor), "\n") #353
+cat("Development categories:", nlevels(model_data$english_categories), "\n") #9
 cat("\nPolygons per development category:\n")
 print(table(model_data$english_categories))
+# Combined   Commercial      Defense       Mining Recreational  Residential       Retail     Services      Tourism 
+#     4266         9662           25         4436        55702        44009          900         5568         5313
 cat("\nOccurrence count summary:\n")
 print(summary(model_data$n_occurrences))
+# Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+# 0.000     0.000     0.000     2.491     0.000 22318.000 
 cat("Proportion of zero-occurrence polygons:",
-    round(mean(model_data$n_occurrences == 0), 3), "\n")
+    round(mean(model_data$n_occurrences == 0), 3), "\n") #0.909 
 
 # 3. FIT MODELS ----------------------------------------------------------------
 
@@ -70,9 +74,12 @@ save(h3_zinb, file = here::here("data", "models", "h3_zinb.RData"))
 
 # Compare models
 AICtab(h3_nb, h3_zinb, base = TRUE)
+#         AIC      dAIC     df
+# h3_zinb 138625.4      0.0 27
+# h3_nb   142278.5   3653.1 17
 
 # Keep the best model
-best_model_h3 <- h3_nb
+best_model_h3 <- h3_zinb
 
 # 4. MODEL SUMMARY AND DIAGNOSTICS ---------------------------------------------
 
@@ -127,11 +134,14 @@ print(testOutliers(sim_residuals_h3))
 # Get random effect variance
 random_effects_h3 <- VarCorr(best_model_h3)
 print(random_effects_h3)
+# Conditional model:
+#   Groups         Name        Std.Dev.
+# kommune_factor (Intercept) 1.3889  
 
 # Calculate ICC (intraclass correlation coefficient)
 # Proportion of variance explained by municipality
 re_var_h3 <- as.numeric(random_effects_h3$cond$kommune_factor[1])
-cat("Random effect variance (kommune):", round(re_var_h3, 4), "\n")
+cat("Random effect variance (kommune):", round(re_var_h3, 4), "\n") #1.9289
 
 # 5. HYPOTHESIS TESTING --------------------------------------------------------
 
@@ -145,6 +155,16 @@ emm_category <- emmeans(best_model_h3, ~ english_categories,
                         offset = 0, type = "response")
 cat("Estimated occurrence density (records per km2) by development category:\n")
 print(summary(emm_category))
+# english_categories response    SE  df asymp.LCL asymp.UCL
+# Combined                261  31.0 Inf       207       329
+# Commercial              231  23.1 Inf       190       281
+# Defense                 127  90.9 Inf        31       517
+# Mining                  144  18.9 Inf       112       187
+# Recreational            219  21.5 Inf       180       265
+# Residential             278  25.8 Inf       232       334
+# Retail                  505 118.0 Inf       320       799
+# Services                332  37.3 Inf       266       414
+# Tourism                 451  54.4 Inf       356       572
 
 # Get pairwise comparisons between development categories
 pairwise_category <- contrast(emm_category, method = "pairwise",
@@ -198,7 +218,7 @@ ggsave(filename = here("figures", "Figure_H3_density_by_category.pdf"),
 ## 6.2.Pairwise density ratios  ------------------------------------------------
 
 # Get all pairwise ratios on a log scale (use 1 as a reference line to mean no difference)
-#pw_df <- as.data.frame(summary(pairwise_category, infer = TRUE))
+pw_df <- as.data.frame(summary(pairwise_category, infer = TRUE))
 ratio_col <- grep("ratio|estimate", names(pw_df), value = TRUE)[1]
 plo_col   <- grep("LCL|lower", names(pw_df), value = TRUE)[1]
 phi_col   <- grep("UCL|upper", names(pw_df), value = TRUE)[1]
@@ -207,7 +227,7 @@ pw_df <- pw_df |>
   mutate(significant = ifelse(p.value < 0.05, "Yes", "No"))
 
 # Create prediction plot
-fig_h3_pairwise <- ggplot(pw_df,
+(fig_h3_pairwise <- ggplot(pw_df,
                           aes(x = ratio, y = reorder(contrast, ratio),
                               colour = significant)) +
   geom_vline(xintercept = 1, linetype = "dashed", colour = "grey50") +
@@ -221,7 +241,7 @@ fig_h3_pairwise <- ggplot(pw_df,
         axis.title = element_text(size = 13),
         axis.text.y = element_text(size = 8),
         axis.text.x = element_text(size = 11),
-        legend.position = "bottom")
+        legend.position = "bottom"))
 
 # Save figure
 ggsave(filename = here("figures", "Figure_H3_pairwise_category_ratios.png"),
