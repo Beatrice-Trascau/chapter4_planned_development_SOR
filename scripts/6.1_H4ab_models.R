@@ -372,29 +372,373 @@ best_presence <- h4_presence_full
 
 # 6. MODEL SUMMARIES -----------------------------------------------------------
 
+## 6.1. H4ab model -------------------------------------------------------------
 
+# Quick look at the model summary
+print(summary(best_split))
 
+# Create a simple coefficient table to use in the manuscript
+coef_table_split <- broom.mixed::tidy(best_split,
+                                      effects  = "fixed",
+                                      conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 3),
+         SE = round(std.error, 3),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
+  select(Term = term, Estimate, SE, `z value`, `p value`)
 
+# Save to file
+write.csv(coef_table_split,
+          here("figures", "Table_H4ab_split_model_coefficients.csv"),
+          row.names = FALSE)
 
+## 6.2. H4 presence model ------------------------------------------------------
 
+# Quick look at the model summary
+print(summary(best_presence))
 
+# Create a simple coefficient table to use in the manuscript
+coef_table_presence <- broom.mixed::tidy(best_presence,
+                                         effects  = "fixed",
+                                         conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 3),
+         SE = round(std.error, 3),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
+  select(Term = term, Estimate, SE, `z value`, `p value`)
 
+# Save to file
+write.csv(coef_table_presence,
+          here("figures", "Table_H4_presence_model_coefficients.csv"),
+          row.names = FALSE)
 
+# 7. MODEL DIAGNOSTIC WITH DHARMA ----------------------------------------------
 
+## 7.1 H4ab model --------------------------------------------------------------
 
+# Simulate residuals
+sim_residuals_split <- simulateResiduals(fittedModel = best_split, n = 1000)
 
+# Create & save diagnostic plots
+png(filename = here("figures", "Figure_H4ab_betabinomial_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_split)
+dev.off()
 
+# Test dispersion 
+print(testDispersion(sim_residuals_split))
 
+# Test outliers
+print(testOutliers(sim_residuals_split))
 
+## 7.2. H4 presence model ------------------------------------------------------
 
+# Simulate residuals
+sim_residuals_presence <- simulateResiduals(fittedModel = best_presence, n = 1000)
 
+# Create & save diagnostic plots
+png(filename = here("figures", "Figure_H4_presence_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_presence)
+dev.off()
 
+# Test dispersion
+print(testDispersion(sim_residuals_presence))
 
+# Test outliers
+print(testOutliers(sim_residuals_presence))
 
+# 8. EXTRACT RANDOM EFFECTS ----------------------------------------------------
 
+# Extract random effects for H4ab model
+random_effects_split <- VarCorr(best_split)
+cat("\n=== H4a/H4b random effects (kommune) ===\n")
+print(random_effects_split)
+re_var_split <- as.numeric(random_effects_split$cond$kommune_factor[1])
+cat("Random effect variance (kommune):", round(re_var_split, 4), "\n")
 
+# Extract random effects for H4 presence model
+random_effects_presence <- VarCorr(best_presence)
+cat("\n=== H4 presence random effects (kommune / pair) ===\n")
+print(random_effects_presence)
 
+# 9. HYPOTHESIS TESTING --------------------------------------------------------
 
+## 9.1. H4a - is the polygon share of red-listed SOR above 0.5? ----------------
 
+# Average share of SOR over land-cover (a value of 0.5 = no difference in density)
+emm_overall <- emmeans(best_split, ~ 1, offset = 0, type = "response")
+cat("Estimated polygon share of red-listed records (averaged over land cover):\n")
+print(summary(emm_overall))
 
+# Get estimate and CI and covert to scales you can report
+emm_df <- as.data.frame(emm_overall)
+pi_hat <- emm_df$prob
+ci_lo  <- emm_df[[grep("LCL|lower", names(emm_df), value = TRUE)[1]]]
+ci_hi  <- emm_df[[grep("UCL|upper", names(emm_df), value = TRUE)[1]]]
 
+# Interpret results
+to_ratio <- function(p) p / (1 - p)
+to_index <- function(p) 2 * p - 1
+
+cat("\n--- H4a effect size ---\n")
+cat(sprintf("Polygon share:  %.3f  [%.3f, %.3f]\n", pi_hat, ci_lo, ci_hi))
+cat(sprintf("Polygon:buffer ratio:  %.3f  [%.3f, %.3f]\n",
+            to_ratio(pi_hat), to_ratio(ci_lo), to_ratio(ci_hi)))
+cat(sprintf("Symmetric index (2p-1): %.3f  [%.3f, %.3f]\n",
+            to_index(pi_hat), to_index(ci_lo), to_index(ci_hi)))
+
+if (ci_lo > 0.5) {
+  cat("\nH4a SUPPORTED: the CI for the polygon share lies entirely above 0.5.\n")
+} else if (ci_hi < 0.5) {
+  cat("\nH4a NOT supported: the share lies below 0.5 (buffers hold more).\n")
+} else {
+  cat("\nH4a inconclusive: the CI for the polygon share includes 0.5.\n")
+}
+
+## 9.2. H4b - does the share of red-listed SOR increase with area? -------------
+cat("\nH4b: red-listed SOR rises with area faster inside polygons than outside.\n")
+cat("     A POSITIVE log_area_c slope means the polygon pulls ahead of its\n")
+cat("     buffer as pairs get larger.\n\n")
+
+# Average area slope of the share of SOR across land-covers
+slope_overall <- emtrends(best_split, ~ 1, var = "log_area_c")
+cat("Average effect of log(area) on the polygon share (logit scale):\n")
+print(summary(slope_overall))
+
+# Extract slope CI
+slope_df  <- as.data.frame(slope_overall)
+trend_col <- grep("trend", names(slope_df), value = TRUE)[1]
+slo_lo    <- slope_df[[grep("LCL|lower", names(slope_df), value = TRUE)[1]]]
+slo_hi    <- slope_df[[grep("UCL|upper", names(slope_df), value = TRUE)[1]]]
+slo_est   <- slope_df[[trend_col]]
+
+cat(sprintf("\nArea slope: %.3f  [%.3f, %.3f]\n", slo_est, slo_lo, slo_hi))
+if (slo_lo > 0) {
+  cat("H4b SUPPORTED: the share increases with area (slope CI entirely > 0).\n")
+} else if (slo_hi < 0) {
+  cat("H4b NOT supported: the share DECREASES with area (buffer pulls ahead).\n")
+} else {
+  cat("H4b inconclusive: the area slope CI includes 0.\n")
+}
+
+# Get area slope per land-cover
+slope_landcover <- emtrends(best_split, ~ land_cover_name, var = "log_area_c")
+cat("\nArea slope of the share by land cover (logit scale):\n")
+print(summary(slope_landcover))
+
+# Save slopes to file
+write.csv(as.data.frame(slope_landcover),
+          here("figures", "Table_H4b_area_slope_by_landcover.csv"),
+          row.names = FALSE)
+
+## 9.3. Does the split of red-listed SOR depend on land cover? -----------------
+
+cat("\n=== LRT for the area x land cover interaction (split model) ===\n")
+lrt_split <- anova(h4ab_betabin_additive, h4ab_betabin_full)
+print(lrt_split)
+
+## 9.4. H4a share by land-cover ------------------------------------------------
+
+# Extract emmeans by land-cover
+emm_landcover <- emmeans(best_split, ~ land_cover_name, offset = 0, type = "response")
+cat("\n=== Estimated polygon share of red-listed SOR by land cover ===\n")
+print(summary(emm_landcover))
+
+# Convert to df and save
+landcover_df <- as.data.frame(emm_landcover)
+write.csv(landcover_df,
+          here("figures", "Table_H4a_share_by_landcover.csv"),
+          row.names = FALSE)
+
+# Save the H4ab inference objects for later use
+saveRDS(list(h4a_overall_share = emm_overall,
+             h4a_share_by_lc = emm_landcover,
+             h4b_area_slope = slope_overall,
+             h4b_slope_by_lc = slope_landcover,
+             lrt_interaction = lrt_split),
+        here("data", "models", "h4ab_betabin_inference.rds"))
+
+## 9.5. H4 presence: are polygons less likely to be empty of red-listed SOR? ---
+
+cat("\nH4 presence: development polygons are LESS likely to hold zero red-listed\n")
+cat("             records than their paired buffers.\n\n")
+
+# Probability of presence for polygon vs buffer, averaged over area and land cover
+emm_presence <- emmeans(best_presence, ~ polygon_type, type = "response")
+cat("Probability a side holds any red-listed record, by side:\n")
+print(summary(emm_presence))
+
+# Development polygon vs buffer as an odds ratio
+contrast_presence <- contrast(emm_presence, method = "revpairwise", type = "response")
+cat("\nDevelopment vs Buffer (odds ratio for holding any red-listed record):\n")
+print(summary(contrast_presence, infer = TRUE))   # infer = TRUE adds the CI
+
+# Get the odds-ratio CI
+con_df <- as.data.frame(confint(contrast_presence))
+or_col <- grep("ratio|estimate", names(con_df), value = TRUE)[1]
+or_lo  <- con_df[[grep("LCL|lower", names(con_df), value = TRUE)[1]]]
+or_hi  <- con_df[[grep("UCL|upper", names(con_df), value = TRUE)[1]]]
+or_est <- con_df[[or_col]]
+
+stopifnot(length(or_est) == 1, length(or_lo) == 1, length(or_hi) == 1)
+
+cat(sprintf("\nOdds ratio (Development / Buffer): %.3f  [%.3f, %.3f]\n",
+            or_est, or_lo, or_hi))
+if (or_lo > 1) {
+  cat("H4 presence SUPPORTED: development polygons are more likely to hold\n")
+  cat("   red-listed records (less likely to be empty) than their buffers.\n")
+} else if (or_hi < 1) {
+  cat("H4 presence NOT supported: development polygons are MORE likely to be empty.\n")
+} else {
+  cat("H4 presence inconclusive: the odds-ratio CI includes 1.\n")
+}
+
+# Save presence inference
+saveRDS(list(presence_by_side = emm_presence,
+             dev_vs_buffer    = contrast_presence),
+        here("data", "models", "h4_presence_inference.rds"))
+
+# 10. PLOT PREDICTIONS ---------------------------------------------------------
+
+# Use a function to display the land-cover names corrrectly
+pretty_lc <- function(x) {
+  x <- gsub("_", " ", x)
+  gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
+}
+
+## 10.1. H4ab - predicted share of Red-Listed SOR by area and land-cover -------
+
+# Predict values
+predictions_split <- ggpredict(best_split,
+                               terms = c("log_area_c [all]", "land_cover_name"),
+                               condition = c(area_offset = 0))
+
+# Convert to df
+pred_df_split <- as.data.frame(predictions_split) |>
+  rename(log_area_c = x, land_cover_name = group)
+
+# Only use observed values for log-area for each land-cover
+lc_ranges_split <- pair_records |>
+  group_by(land_cover_name) |>
+  summarise(lo = min(log_area_c), hi = max(log_area_c), .groups = "drop")
+
+# Add them to tehm prediction df
+pred_df_split <- pred_df_split |>
+  left_join(lc_ranges_split, by = "land_cover_name") |>
+  filter(log_area_c >= lo, log_area_c <= hi) |>
+  select(-lo, -hi)
+
+# Plot figure
+(fig_split_predictions <- ggplot(pred_df_split,
+                                 aes(x = log_area_c, y = predicted)) +
+    geom_hline(yintercept = 0.5, linetype = "dashed",
+               colour = "grey40", linewidth = 0.5) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+                fill = "#E66101", alpha = 0.2) +
+    geom_line(colour = "#E66101", linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_y_continuous(labels = scales::percent) +
+    labs(x = expression(paste("log(Polygon Area (m"^2, "))")),
+         y = "Predicted Share of Red-listed SOR Within the Development Polygons") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold")))
+
+# Save to file
+ggsave(filename = here("figures", "Figure_H4ab_predicted_share_by_landcover.png"),
+       plot = fig_split_predictions, width = 14, height = 10, dpi = 600)
+ggsave(filename = here("figures", "Figure_H4ab_predicted_share_by_landcover.pdf"),
+       plot = fig_split_predictions, width = 14, height = 10, dpi = 600)
+
+## 10.2. H4a - estimated share of Red-Listed SOR by land-cover -----------------
+
+# Change the land coevr df for better plotting
+landcover_plot_df <- landcover_df |>
+  rename(share = prob) |>
+  rename(conf.low  = grep("LCL|lower", names(landcover_df), value = TRUE)[1],
+         conf.high = grep("UCL|upper", names(landcover_df), value = TRUE)[1])
+
+# Plot figure
+(fig_h4a_landcover <- ggplot(landcover_plot_df,
+                             aes(x = reorder(land_cover_name, share),
+                                 y = share)) +
+    geom_hline(yintercept = 0.5, linetype = "dashed",
+               colour = "grey40", linewidth = 0.5) +
+    geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
+                    colour = "#E66101", linewidth = 0.8, size = 0.6) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_discrete(labels = pretty_lc) +
+    coord_flip() +
+    labs(x = "Land-cover Type",
+         y = "Estimated Share of Red-listed SOR Within the Development Polygons") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 14),
+          axis.text  = element_text(size = 12)))
+
+# Save figure
+ggsave(filename = here("figures", "Figure_H4a_share_by_landcover_pointrange.png"),
+       plot = fig_h4a_landcover, width = 10, height = 7, dpi = 600)
+ggsave(filename = here("figures", "Figure_H4a_share_by_landcover_pointrange.pdf"),
+       plot = fig_h4a_landcover, width = 10, height = 7, dpi = 600)
+
+## 10.3. H4 presence - probability of having any RL SOR by land-cover ----------
+
+# Predict values
+predictions_presence <- ggpredict(best_presence,
+                                  terms = c("log_area_c [n=100]", "polygon_type",
+                                            "land_cover_name"))
+
+# Convert predictions to df
+pred_df_presence <- as.data.frame(predictions_presence) |>
+  rename(log_area_c = x, polygon_type = group, land_cover_name = facet)
+
+# Only use observed log area values for each land-cover
+lc_ranges_presence <- presence_data |>
+  group_by(land_cover_name, polygon_type) |>
+  summarise(lo = min(log_area_c), hi = max(log_area_c), .groups = "drop")
+
+# Add the observed log area values for land-cover to the predictions df
+pred_df_presence <- pred_df_presence |>
+  left_join(lc_ranges_presence, by = c("land_cover_name", "polygon_type")) |>
+  filter(log_area_c >= lo, log_area_c <= hi) |>
+  select(-lo, -hi)
+
+# Define colour scheme
+polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
+
+# Plot figure
+(fig_presence_predictions <- ggplot(pred_df_presence,
+                                    aes(x = log_area_c, y = predicted,
+                                        colour = polygon_type, fill = polygon_type)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+    geom_line(linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_colour_manual(values = polygon_colours, name = "Area type") +
+    scale_fill_manual(values = polygon_colours, name = "Area type") +
+    scale_y_continuous(labels = scales::percent) +
+    labs(x = expression(paste("log(Area (m"^2, "))")),
+         y = "Probability of Side Containing Any Red-listed SOR") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold"),
+          legend.position = "right",
+          legend.title = element_text(size = 16),
+          legend.text = element_text(size = 14)))
+
+# Save to file
+ggsave(filename = here("figures", "Figure_H4_presence_by_side_and_landcover.png"),
+       plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
+ggsave(filename = here("figures", "Figure_H4_presence_by_side_and_landcover.pdf"),
+       plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
+
+# END OF SCRIPT ----------------------------------------------------------------
