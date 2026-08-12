@@ -293,3 +293,108 @@ cat("Pairs with zero red-listed records in BOTH halves:",
     sum(pair_data$sor_total == 0), "\n")
 cat("Polygon share of red-listed records (record-bearing pairs only):\n")
 print(summary(pair_data$share_polygon))
+
+# 5. FIT MODELS  ---------------------------------------------------------------
+
+# Separate the pairs with no red-listed records from those that have red-listed records
+pair_records <- pair_data |>
+  filter(sor_total > 0) |>
+  droplevels()   # drop any land-cover / kommune levels with no record-bearing pairs
+cat("\nPairs entering the split model (H4a / H4b):", nrow(pair_records), "\n")
+
+# Check how many record there are per land-cover
+cat("Record-bearing pairs by land cover:\n")
+print(table(pair_records$land_cover_name))
+
+## 5.1. H4ab split model with full interaction ---------------------------------
+
+# Build model
+h4ab_betabin_full <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
+                               log_area_c * land_cover_name +
+                               offset(area_offset) + (1 | kommune_factor),
+                             data   = pair_records,
+                             family = betabinomial)
+
+# Save model output
+save(h4ab_betabin_full,
+     file = here::here("data", "models", "h4ab_betabin_full.RData"))
+
+## 5.2. H4ab additive split model ----------------------------------------------
+
+# Build the model
+h4ab_betabin_additive <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
+                                   log_area_c + land_cover_name +
+                                   offset(area_offset) + (1 | kommune_factor),
+                                 data   = pair_records,
+                                 family = betabinomial)
+
+# SAve the output
+save(h4ab_betabin_additive,
+     file = here::here("data", "models", "h4ab_betabin_additive.RData"))
+
+# Compare the models
+AICtab(h4ab_betabin_full, h4ab_betabin_additive, base = TRUE)
+
+# Pick the better model
+best_split <- h4ab_betabin_additive
+
+## 5.3. H4 presence model with full interaction --------------------------------
+
+# Do polygons differ from buffers in the probability of holding ANY red-listed
+# record at all? (analogue of the H1 presence model in 4.1) 
+h4_presence_full <- glmmTMB(presence ~ polygon_type * (log_area_c + land_cover_name) +
+                              (1 | kommune_factor/pair_id_factor),
+                            data   = presence_data,
+                            family = binomial)
+
+# Save model
+save(h4_presence_full,
+     file = here::here("data", "models", "h4_presence_full.RData"))
+
+## 5.4. H4 presence model additive ---------------------------------------------
+
+# Build the model
+h4_presence_additive <- glmmTMB(presence ~ polygon_type + log_area_c +
+                                  land_cover_name +
+                                  (1 | kommune_factor/pair_id_factor),
+                                data   = presence_data,
+                                family = binomial)
+
+# Save the model output
+save(h4_presence_additive,
+     file = here::here("data", "models", "h4_presence_additive.RData"))
+
+# Compare the models
+AICtab(h4_presence_full, h4_presence_additive, base = TRUE)
+
+# Use the better presence model
+best_presence <- h4_presence_full
+
+# 6. MODEL SUMMARIES -----------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
