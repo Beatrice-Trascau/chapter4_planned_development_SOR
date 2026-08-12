@@ -212,7 +212,7 @@ write.csv(coef_table_presence,
 
 # 5. MODEL DIAGNOSTICS WITH DHARMA ---------------------------------------------
 
-## 5.1. H2ab model --------................-------------------------------------
+## 5.1. H2ab model -------------------------------------------------------------
 
 # Simulate residuals
 sim_residuals_split <- simulateResiduals(fittedModel = best_split, n = 1000)
