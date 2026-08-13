@@ -153,6 +153,8 @@ redlist_final <- bind_rows(redlist_exact, manual_resolved) |>
 
 # Check how many species are in each category 
 print(table(redlist_final$redlist_category))
+# CR    DD    EN    LC    NT    VU 
+# 296   738   959 18265  1360  1483 
 
 # Save the resolved red list to use in 6.2. and 6.3
 saveRDS(redlist_final,
@@ -173,18 +175,20 @@ occ_join_rl <- occ_join |>
 
 # Check hoe many records are redlisted
 cat("\nRed-listed occurrence records:", nrow(occ_join_rl),
-    "of", sum(!is.na(occ_join$gbifID)), "matched records\n")
+    "of", sum(!is.na(occ_join$gbifID)), "matched records\n") # 615302 of 682121 matched records
 cat("Distinct red-listed species observed in the data:",
     n_distinct(occ_join_rl$species), "of", length(redlist_species),
-    "on the list\n")
+    "on the list\n") # 10883 of 23101 on the list
 cat("Red-listed occurrences by category:\n")
 print(table(occ_join_rl$redlist_category))
+# CR     DD     EN     LC     NT     VU 
+# 5501    671   7969 508868  42662  49631 
 
 # Save the red-listed occurrence-level join for H4d
 saveRDS(occ_join_rl,
         here("data", "derived_data", "h4_polygon_buffer_occurrence_join.rds"))
 
-## 3.2. Recompute per-side red-listed counts
+## 3.2. Recompute per-side red-listed counts -----------------------------------
 
 # Count red-listed SOR and red-listed species per side
 redlist_counts <- occ_join_rl |>
@@ -220,13 +224,15 @@ pair_counts <- model_data_rl |>
   summarise(n_dev = sum(polygon_type == "Development"),
             n_buf = sum(polygon_type == "Buffer"), .groups = "drop")
 stopifnot(all(pair_counts$n_dev == 1 & pair_counts$n_buf == 1))
-cat("\nPASS: red-listed side data assembled, pairing intact\n")
+cat("\nPASS: red-listed side data assembled, pairing intact\n") # PASS
 
 # Quickly inspect the data
 cat("\nMean red-listed SOR by side:\n")
 print(tapply(model_data_rl$n_occurrences, model_data_rl$polygon_type, mean))
+# Buffer Development 
+# 2.475828    2.261601 
 cat("Proportion of sides with zero red-listed records:",
-    round(mean(model_data_rl$n_occurrences == 0), 3), "\n")
+    round(mean(model_data_rl$n_occurrences == 0), 3), "\n") #0.905
 
 # Save the red-listed per-side dataset
 saveRDS(model_data_rl,
@@ -276,23 +282,25 @@ presence_data <- model_data_rl |>
 
 # Check that there is exactly one row per pair
 stopifnot(nrow(pair_data) == n_distinct(model_data_rl$pair_id))
-cat("\nPairs after reshape:", nrow(pair_data), "\n")
+cat("\nPairs after reshape:", nrow(pair_data), "\n") #129881
 
-## Check that counts are complete and offset/area are finite everywhere
+# Check that counts are complete and offset/area are finite everywhere
 stopifnot(!any(is.na(pair_data$sor_polygon)),
           !any(is.na(pair_data$sor_buffer)),
           all(is.finite(pair_data$area_offset)),
           all(is.finite(pair_data$log_area_c)))
-cat("PASS: counts complete and offset/area finite\n")
+cat("PASS: counts complete and offset/area finite\n") # PASS
 
 # Checkt the response
 cat("Pairs with any red-listed records:", sum(pair_data$any_records), "of",
     nrow(pair_data), "(",
-    round(100 * mean(pair_data$any_records), 1), "%)\n")
+    round(100 * mean(pair_data$any_records), 1), "%)\n") # PASS
 cat("Pairs with zero red-listed records in BOTH halves:",
-    sum(pair_data$sor_total == 0), "\n")
+    sum(pair_data$sor_total == 0), "\n") #111222 
 cat("Polygon share of red-listed records (record-bearing pairs only):\n")
 print(summary(pair_data$share_polygon))
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max.     NAs 
+# 0.0000  0.0000  0.1907  0.3939  0.9640  1.0000  111222 
 
 # 5. FIT MODELS  ---------------------------------------------------------------
 
@@ -300,11 +308,15 @@ print(summary(pair_data$share_polygon))
 pair_records <- pair_data |>
   filter(sor_total > 0) |>
   droplevels()   # drop any land-cover / kommune levels with no record-bearing pairs
-cat("\nPairs entering the split model (H4a / H4b):", nrow(pair_records), "\n")
+cat("\nPairs entering the split model (H4a / H4b):", nrow(pair_records), "\n") # 18659
 
 # Check how many record there are per land-cover
 cat("Record-bearing pairs by land cover:\n")
 print(table(pair_records$land_cover_name))
+# Cropland             Forest          Grassland          Heathland        Settlements Sparsely_vegetated 
+# 1867              12037                439               1397               2237                361 
+# Wetlands 
+# 321 
 
 ## 5.1. H4ab split model with full interaction ---------------------------------
 
@@ -334,6 +346,9 @@ save(h4ab_betabin_additive,
 
 # Compare the models
 AICtab(h4ab_betabin_full, h4ab_betabin_additive, base = TRUE)
+#                       AIC     dAIC    df
+# h4ab_betabin_additive 64731.3     0.0 10
+# h4ab_betabin_full     64738.9     7.5 16
 
 # Pick the better model
 best_split <- h4ab_betabin_additive
@@ -366,6 +381,9 @@ save(h4_presence_additive,
 
 # Compare the models
 AICtab(h4_presence_full, h4_presence_additive, base = TRUE)
+#                      AIC      dAIC     df
+# h4_presence_full     118338.6      0.0 18
+# h4_presence_additive 118498.8    160.2 11
 
 # Use the better presence model
 best_presence <- h4_presence_full
@@ -452,15 +470,19 @@ print(testOutliers(sim_residuals_presence))
 
 # Extract random effects for H4ab model
 random_effects_split <- VarCorr(best_split)
-cat("\n=== H4a/H4b random effects (kommune) ===\n")
+cat("\n=== H4a/H4b random effects (kommune) ===\n") #0.13878 
 print(random_effects_split)
 re_var_split <- as.numeric(random_effects_split$cond$kommune_factor[1])
-cat("Random effect variance (kommune):", round(re_var_split, 4), "\n")
+cat("Random effect variance (kommune):", round(re_var_split, 4), "\n") #0.0193
 
 # Extract random effects for H4 presence model
 random_effects_presence <- VarCorr(best_presence)
-cat("\n=== H4 presence random effects (kommune / pair) ===\n")
+cat("\n=== H4 presence random effects (kommune / pair) ===\n") 
 print(random_effects_presence)
+# Conditional model:
+# Groups                        Name        Std.Dev.
+# pair_id_factor:kommune_factor (Intercept) 1.82103 
+# kommune_factor                (Intercept) 0.87399
 
 # 9. HYPOTHESIS TESTING --------------------------------------------------------
 
@@ -483,8 +505,10 @@ to_index <- function(p) 2 * p - 1
 
 cat("\n--- H4a effect size ---\n")
 cat(sprintf("Polygon share:  %.3f  [%.3f, %.3f]\n", pi_hat, ci_lo, ci_hi))
+#Polygon share:  0.422  [0.410, 0.435]
 cat(sprintf("Polygon:buffer ratio:  %.3f  [%.3f, %.3f]\n",
             to_ratio(pi_hat), to_ratio(ci_lo), to_ratio(ci_hi)))
+#Polygon:buffer ratio:  0.730  [0.694, 0.769]
 cat(sprintf("Symmetric index (2p-1): %.3f  [%.3f, %.3f]\n",
             to_index(pi_hat), to_index(ci_lo), to_index(ci_hi)))
 
@@ -495,9 +519,11 @@ if (ci_lo > 0.5) {
 } else {
   cat("\nH4a inconclusive: the CI for the polygon share includes 0.5.\n")
 }
+##H4a NOT supported: the share lies below 0.5 (buffers hold more)
 
 ## 9.2. H4b - does the share of red-listed SOR increase with area? -------------
 cat("\nH4b: red-listed SOR rises with area faster inside polygons than outside.\n")
+# H4b: red-listed SOR rises with area faster inside polygons than outside.
 cat("     A POSITIVE log_area_c slope means the polygon pulls ahead of its\n")
 cat("     buffer as pairs get larger.\n\n")
 
@@ -505,6 +531,8 @@ cat("     buffer as pairs get larger.\n\n")
 slope_overall <- emtrends(best_split, ~ 1, var = "log_area_c")
 cat("Average effect of log(area) on the polygon share (logit scale):\n")
 print(summary(slope_overall))
+# 1       log_area_c.trend      SE  df asymp.LCL asymp.UCL
+# overall          -0.0313 0.00807 Inf   -0.0471   -0.0155
 
 # Extract slope CI
 slope_df  <- as.data.frame(slope_overall)
@@ -521,6 +549,7 @@ if (slo_lo > 0) {
 } else {
   cat("H4b inconclusive: the area slope CI includes 0.\n")
 }
+#H4b NOT supported: the share DECREASES with area (buffer pulls ahead).
 
 # Get area slope per land-cover
 slope_landcover <- emtrends(best_split, ~ land_cover_name, var = "log_area_c")
@@ -563,6 +592,7 @@ saveRDS(list(h4a_overall_share = emm_overall,
 
 cat("\nH4 presence: development polygons are LESS likely to hold zero red-listed\n")
 cat("             records than their paired buffers.\n\n")
+# H4 presence: development polygons are LESS likely to hold zero red-listed records than their paired buffers.
 
 # Probability of presence for polygon vs buffer, averaged over area and land cover
 emm_presence <- emmeans(best_presence, ~ polygon_type, type = "response")
@@ -573,6 +603,8 @@ print(summary(emm_presence))
 contrast_presence <- contrast(emm_presence, method = "revpairwise", type = "response")
 cat("\nDevelopment vs Buffer (odds ratio for holding any red-listed record):\n")
 print(summary(contrast_presence, infer = TRUE))   # infer = TRUE adds the CI
+# contrast             odds.ratio     SE  df asymp.LCL asymp.UCL null z.ratio p.value
+# Development / Buffer       0.72 0.0267 Inf      0.67     0.775    1  -8.864 <0.0001
 
 # Get the odds-ratio CI
 con_df <- as.data.frame(confint(contrast_presence))
@@ -593,6 +625,7 @@ if (or_lo > 1) {
 } else {
   cat("H4 presence inconclusive: the odds-ratio CI includes 1.\n")
 }
+# H4 presence NOT supported: development polygons are MORE likely to be empty.
 
 # Save presence inference
 saveRDS(list(presence_by_side = emm_presence,
