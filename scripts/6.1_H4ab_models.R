@@ -25,8 +25,12 @@ print(table(model_data$polygon_type))
 
 # 2. INCORPORATE RED LIST INTO MODEL DATA --------------------------------------
 
-# Create a list of the categories we are keeping
-redlist_categories <- c("CR", "EN", "VU", "NT", "DD", "LC")
+# Create two groups: 1) the red-listed categories and 2) the LC category as a baseline to compare to
+redlisted_categories <- c("CR", "EN", "VU", "NT", "DD")
+baseline_categories  <- c("LC")
+
+# Combine all assessed categories to retain in the canonical list
+assessed_categories <- c(redlisted_categories, baseline_categories)
 
 # Order the categories by severity
 severity_order <- c("CR", "EN", "VU", "NT", "DD", "LC")
