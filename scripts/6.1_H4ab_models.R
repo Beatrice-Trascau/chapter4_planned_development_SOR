@@ -73,6 +73,8 @@ redlist_harmonised <- redlist_clean |>
 
 # Quick look at the harmonised redlist
 print(table(redlist_harmonised$match_type))
+# EXACT      FUZZY HIGHERRANK       NONE 
+# 23295        191         75         10 
 
 ## 2.2. Resolve exact matches --------------------------------------------------
 
@@ -83,7 +85,7 @@ redlist_exact <- redlist_harmonised |>
             redlist_category = redlist_category)
 
 # Check how many rows had an exact match
-cat("EXACT-match red list species:", nrow(redlist_exact), "\n")
+cat("EXACT-match red list species:", nrow(redlist_exact), "\n") # 23295
 
 ## 2.3. Manually resolve non-exact matches -------------------------------------
 
@@ -122,17 +124,19 @@ manual_resolved <- manual_raw |>
     TRUE                                      ~ NA_character_))
 
 # Check that it all went ok
-cat("  rows total:                       ", nrow(manual_resolved), "\n")
-cat("  Accepted = Y kept:                ",
-    sum(manual_resolved$accepted == "Y"), "\n")
-cat("  Accepted = N with New Name kept:  ",
-    sum(manual_resolved$accepted == "N" & !is.na(manual_resolved$resolved)), "\n")
-cat("  dropped ('remove' or blank):      ",
-    sum(is.na(manual_resolved$resolved)), "\n")
+cat("rows total: ", nrow(manual_resolved), "\n") #276
+cat("Accepted = Y kept: ", sum(manual_resolved$accepted == "Y"), "\n") #214
+cat("Accepted = N with New Name kept: ", sum(manual_resolved$accepted == "N" & !is.na(manual_resolved$resolved)), "\n") #54
+cat("dropped ('remove' or blank): ", sum(is.na(manual_resolved$resolved)), "\n") # 8
 cat("  Accepted = Y rows where New Name overrode GBIF name:\n")
 print(manual_resolved |>
         filter(accepted == "Y", resolved == new_clean, new_clean != gbif_clean) |>
         select(gbif_clean, new_clean))
+# gbif_clean                      new_clean             
+# <chr>                           <chr>                 
+# 1 Ammophila arenaria            Calamagrostis arenaria
+# 2 Erigeron acris subsp. politus Erigeron acris        
+# 3 Ranunculus auricomus agg.     Ranunculus auricomus  
 
 # Keep only the resolved rows
 manual_resolved <- manual_resolved |>
@@ -140,25 +144,34 @@ manual_resolved <- manual_resolved |>
   transmute(species = resolved, redlist_category)
 
 # Check how many rows are left
-cat("Accepted manually-resolved species:", nrow(manual_resolved), "\n")
+cat("Accepted manually-resolved species:", nrow(manual_resolved), "\n") #268
 
 ## 2.4. Combine into single df -------------------------------------------------
 
 # Combine the resolved list with the red-list
 redlist_final <- bind_rows(redlist_exact, manual_resolved) |>
   filter(!is.na(species), nzchar(species)) |>
-  # order most-threatened first, then keep one row per species (most severe category wins in the case of species with multiple categorisations)
+  # order most-threatened first, then keep one row per species (most severe wins)
   mutate(redlist_category = factor(redlist_category, levels = severity_order)) |>
   arrange(species, redlist_category) |>
   distinct(species, .keep_all = TRUE) |>
   mutate(redlist_category = as.character(redlist_category)) |>
-  # safety filter: keep only the categories we retain (drops any stray values)
-  filter(redlist_category %in% redlist_categories)
+  # safety filter: keep only assessed categories (drops any stray values)
+  filter(redlist_category %in% assessed_categories) |>
+  # tag the group so downstream code can split red-listed vs LC baseline
+  mutate(group = ifelse(redlist_category %in% redlisted_categories,
+                        "redlisted", "LC_baseline"))
 
 # Check how many species are in each category 
+cat("\nCanonical list:", nrow(redlist_final), "species\n") # 23101 species
+cat("Category breakdown:\n")
 print(table(redlist_final$redlist_category))
 # CR    DD    EN    LC    NT    VU 
 # 296   738   959 18265  1360  1483 
+cat("Group breakdown:\n")
+print(table(redlist_final$group))
+# LC_baseline   redlisted 
+# 18265        4836 
 
 # Save the resolved red list to use in 6.2. and 6.3
 saveRDS(redlist_final,
@@ -169,21 +182,22 @@ saveRDS(redlist_final,
 ## 3.1. Flag and keep red-listed occurrences -----------------------------------
 
 # Attach the category 
-occ_join_rl <- occ_join |>
+occ_assessed <- occ_join |>
   filter(!is.na(gbifID)) |>
   mutate(species = clean_name(species)) |>
-  inner_join(redlist_final, by = "species")   # keeps only red-list-assessed occ.
+  inner_join(redlist_final, by = "species")   # keeps only assessed occurrences
 
 # Check hoe many records are redlisted
-cat("\nRed-listed occurrence records:", nrow(occ_join_rl),
-    "of", sum(!is.na(occ_join$gbifID)), "matched records\n") # 615302 of 682121 matched records
-cat("Distinct red-listed species observed in the data:",
-    n_distinct(occ_join_rl$species), "of", length(redlist_species),
-    "on the list\n") # 10883 of 23101 on the list
-cat("Red-listed occurrences by category:\n")
-print(table(occ_join_rl$redlist_category))
+cat("\nAssessed occurrence records:", nrow(occ_assessed), "of", sum(!is.na(occ_join$gbifID)), "matched records\n")
+#615302 of 682121 matched records
+cat("Occurrences by category:\n")
+print(table(occ_assessed$redlist_category))
 # CR     DD     EN     LC     NT     VU 
 # 5501    671   7969 508868  42662  49631 
+cat("Occurrences by group:\n")
+print(table(occ_assessed$group))
+# LC_baseline   redlisted 
+# 508868      106434
 
 # Save the red-listed occurrence-level join for H4d
 saveRDS(occ_assessed |> filter(group == "redlisted"),
@@ -236,13 +250,18 @@ cat("\nPASS: red-listed side data assembled, pairing intact\n") # PASS
 
 # Quickly inspect the data
 cat("\nRed-listed (CR/EN/VU/NT/DD):\n")
-cat("  mean SOR by side:\n"); print(tapply(model_data_rl$n_occurrences,
+cat(" mean SOR by side:\n"); print(tapply(model_data_rl$n_occurrences,
                                            model_data_rl$polygon_type, mean))
-cat("  sides with >=1 record:", sum(model_data_rl$n_occurrences > 0),
+# mean SOR by side
+# Buffer      Development 
+# 0.3744967   0.4449766 
+cat(" sides with >=1 record:", sum(model_data_rl$n_occurrences > 0),
     "(", round(100 * mean(model_data_rl$n_occurrences > 0), 1), "%)\n")
+# sides with >=1 record: 10187 ( 3.9 %)
 cat("LC baseline:\n")
 cat("  sides with >=1 record:", sum(model_data_lc$n_occurrences > 0),
     "(", round(100 * mean(model_data_lc$n_occurrences > 0), 1), "%)\n")
+# LC baseline:  sides with >=1 record: 22810 ( 8.8 %)
 
 # Save the red-listed per-side dataset
 saveRDS(model_data_rl,
@@ -261,10 +280,10 @@ make_pair_data <- function(side) {
            area_m2_numeric, polygon_type, n_occurrences) |>
     tidyr::pivot_wider(names_from  = polygon_type,
                        values_from = c(n_occurrences, area_m2_numeric)) |>
-    rename(sor_polygon  = n_occurrences_Development,
-           sor_buffer   = n_occurrences_Buffer,
+    rename(sor_polygon = n_occurrences_Development,
+           sor_buffer = n_occurrences_Buffer,
            area_polygon = area_m2_numeric_Development,
-           area_buffer  = area_m2_numeric_Buffer) |>
+           area_buffer = area_m2_numeric_Buffer) |>
     mutate(sor_total = sor_polygon + sor_buffer,
            # share of the SOR belonging to the polygon
            share_polygon = ifelse(sor_total > 0, sor_polygon / sor_total, NA_real_),
@@ -284,8 +303,8 @@ make_presence_data <- function(side) {
            polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
            log_area_c = as.numeric(scale(log(area_m2_numeric), scale = FALSE)),
            land_cover_name = factor(land_cover_name),
-           kommune_factor  = factor(kommune),
-           pair_id_factor  = factor(pair_id))
+           kommune_factor = factor(kommune),
+           pair_id_factor = factor(pair_id))
 }
 
 ## 4.2. Reshape df -------------------------------------------------------------
@@ -296,18 +315,21 @@ presence_data <- make_presence_data(model_data_rl)
 
 # Check that we still have one row per pair
 stopifnot(nrow(pair_data) == n_distinct(model_data_rl$pair_id))
-cat("\nPairs after reshape:", nrow(pair_data), "\n")
+cat("\nPairs after reshape:", nrow(pair_data), "\n") # 129881
 
 # Make sure the counts are complete and the area values are finite
 stopifnot(!any(is.na(pair_data$sor_polygon)),
           !any(is.na(pair_data$sor_buffer)),
           all(is.finite(pair_data$area_offset)),
           all(is.finite(pair_data$log_area_c)))
-cat("PASS: counts complete and offset/area finite\n")
+cat("PASS: counts complete and offset/area finite\n") # PASS
 cat("Pairs with any red-listed records:", sum(pair_data$any_records), "of",
     nrow(pair_data), "(", round(100 * mean(pair_data$any_records), 1), "%)\n")
+# Pairs with any red-listed records: 8405 of 129881 ( 6.5 %)
 cat("Polygon share of red-listed records (record-bearing pairs only):\n")
 print(summary(pair_data$share_polygon))
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max.     NAs 
+# 0.0000  0.0000  0.2000  0.4233  1.0000  1.0000  121476 
 
 # 5. FIT MODELS  ---------------------------------------------------------------
 
@@ -315,9 +337,13 @@ print(summary(pair_data$share_polygon))
 pair_records <- pair_data |>
   filter(sor_total > 0) |>
   droplevels()   # drop any land-cover / kommune levels with no record-bearing pairs
-cat("\nPairs entering the split model (H4a / H4b):", nrow(pair_records), "\n")
+cat("\nPairs entering the split model (H4a / H4b):", nrow(pair_records), "\n") # 8405
 cat("Record-bearing pairs by land cover:\n")
 print(table(pair_records$land_cover_name))
+# Cropland             Forest          Grassland          Heathland        Settlements Sparsely_vegetated 
+# 938               5169                233                761                988                168 
+# Wetlands 
+# 148 
 
 ## 5.1. H4ab split model with full interaction ---------------------------------
 
@@ -347,6 +373,9 @@ save(h4ab_betabin_additive,
 
 # Compare the models
 AICtab(h4ab_betabin_full, h4ab_betabin_additive, base = TRUE)
+# AIC     dAIC    df
+# h4ab_betabin_additive 21492.8     0.0 10
+# h4ab_betabin_full     21501.6     8.8 16
 
 # Pick the better model
 best_split <- h4ab_betabin_additive
@@ -379,6 +408,10 @@ save(h4_presence_additive,
 
 # Compare the models
 AICtab(h4_presence_full, h4_presence_additive, base = TRUE)
+#                      AIC     dAIC    df
+# h4_presence_full     57090.2     0.0 18
+# h4_presence_additive 57203.1   112.9 11
+
 
 # Use the better presence model
 best_presence <- h4_presence_full
@@ -465,19 +498,22 @@ print(testOutliers(sim_residuals_presence))
 
 # Extract random effects for H4ab model
 random_effects_split <- VarCorr(best_split)
-cat("\n=== H4a/H4b random effects (kommune) ===\n") #0.13878 
+cat("\n=== H4a/H4b random effects (kommune) ===\n") #0.20113 
 print(random_effects_split)
+# Conditional model:
+#   Groups         Name        Std.Dev.
+# kommune_factor (Intercept) 0.20113 
 re_var_split <- as.numeric(random_effects_split$cond$kommune_factor[1])
-cat("Random effect variance (kommune):", round(re_var_split, 4), "\n") #0.0193
+cat("Random effect variance (kommune):", round(re_var_split, 4), "\n") #0.0405
 
 # Extract random effects for H4 presence model
 random_effects_presence <- VarCorr(best_presence)
 cat("\n=== H4 presence random effects (kommune / pair) ===\n") 
 print(random_effects_presence)
 # Conditional model:
-# Groups                        Name        Std.Dev.
-# pair_id_factor:kommune_factor (Intercept) 1.82103 
-# kommune_factor                (Intercept) 0.87399
+# Groups                        Name        Std.Dev.  
+# pair_id_factor:kommune_factor (Intercept) 8.0832e+00
+# kommune_factor                (Intercept) 5.3505e-05
 
 # 9. HYPOTHESIS TESTING --------------------------------------------------------
 
@@ -524,12 +560,13 @@ to_index <- function(p) 2 * p - 1
 
 cat("\n--- H4a effect size ---\n")
 cat(sprintf("Polygon share:  %.3f  [%.3f, %.3f]\n", pi_hat, ci_lo, ci_hi))
-#Polygon share:  0.422  [0.410, 0.435]
+#Polygon share:  0.455  [0.435, 0.474]
 cat(sprintf("Polygon:buffer ratio:  %.3f  [%.3f, %.3f]\n",
             to_ratio(pi_hat), to_ratio(ci_lo), to_ratio(ci_hi)))
-#Polygon:buffer ratio:  0.730  [0.694, 0.769]
+#Polygon:buffer ratio:  0.833  [0.771, 0.901]
 cat(sprintf("Symmetric index (2p-1): %.3f  [%.3f, %.3f]\n",
             to_index(pi_hat), to_index(ci_lo), to_index(ci_hi)))
+# Symmetric index (2p-1): -0.091  [-0.129, -0.052]
 
 if (ci_lo > 0.5) {
   cat("\nH4a SUPPORTED: the CI for the polygon share lies entirely above 0.5.\n")
@@ -550,8 +587,8 @@ cat("     buffer as pairs get larger.\n\n")
 slope_overall <- emtrends(best_split, ~ 1, var = "log_area_c")
 cat("Average effect of log(area) on the polygon share (logit scale):\n")
 print(summary(slope_overall))
-# 1       log_area_c.trend      SE  df asymp.LCL asymp.UCL
-# overall          -0.0313 0.00807 Inf   -0.0471   -0.0155
+# 1       log_area_c.trend     SE  df asymp.LCL asymp.UCL
+# overall          -0.0467 0.0123 Inf   -0.0709   -0.0225
 
 # Extract slope CI
 slope_df  <- as.data.frame(slope_overall)
@@ -560,7 +597,7 @@ slo_lo    <- slope_df[[grep("LCL|lower", names(slope_df), value = TRUE)[1]]]
 slo_hi    <- slope_df[[grep("UCL|upper", names(slope_df), value = TRUE)[1]]]
 slo_est   <- slope_df[[trend_col]]
 
-cat(sprintf("\nArea slope: %.3f  [%.3f, %.3f]\n", slo_est, slo_lo, slo_hi))
+cat(sprintf("\nArea slope: %.3f  [%.3f, %.3f]\n", slo_est, slo_lo, slo_hi)) #Area slope: -0.047  [-0.071, -0.023]
 if (slo_lo > 0) {
   cat("H4b SUPPORTED: the share increases with area (slope CI entirely > 0).\n")
 } else if (slo_hi < 0) {
@@ -623,7 +660,7 @@ contrast_presence <- contrast(emm_presence, method = "revpairwise", type = "resp
 cat("\nDevelopment vs Buffer (odds ratio for holding any red-listed record):\n")
 print(summary(contrast_presence, infer = TRUE))   # infer = TRUE adds the CI
 # contrast             odds.ratio     SE  df asymp.LCL asymp.UCL null z.ratio p.value
-# Development / Buffer       0.72 0.0267 Inf      0.67     0.775    1  -8.864 <0.0001
+# Development / Buffer      0.724 0.0572 Inf      0.62     0.845    1  -4.096 <0.0001
 
 # Get the odds-ratio CI
 con_df <- as.data.frame(confint(contrast_presence))
@@ -636,6 +673,7 @@ stopifnot(length(or_est) == 1, length(or_lo) == 1, length(or_hi) == 1)
 
 cat(sprintf("\nOdds ratio (Development / Buffer): %.3f  [%.3f, %.3f]\n",
             or_est, or_lo, or_hi))
+# Odds ratio (Development / Buffer): 0.724  [0.620, 0.845]
 if (or_lo > 1) {
   cat("H4 presence SUPPORTED: development polygons are more likely to hold\n")
   cat("   red-listed records (less likely to be empty) than their buffers.\n")
@@ -797,14 +835,14 @@ ggsave(filename = here("figures", "Figure_H4_presence_by_side_and_landcover.pdf"
 
 # Fit models with the same form as the previous red-listed models (i.e. one beta binomial split model and one presence model)
 # Shape dfs
-pair_data_lc     <- make_pair_data(model_data_lc)
+pair_data_lc <- make_pair_data(model_data_lc)
 presence_data_lc <- make_presence_data(model_data_lc)
 
 # Remove the pairs where both polygons and buffers are empty
 pair_records_lc <- pair_data_lc |>
   filter(sor_total > 0) |>
   droplevels()
-cat("\nLC baseline: pairs entering the split model:", nrow(pair_records_lc), "\n")
+cat("\nLC baseline: pairs entering the split model:", nrow(pair_records_lc), "\n") #17411
 
 # Run the split model
 lc_split <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
