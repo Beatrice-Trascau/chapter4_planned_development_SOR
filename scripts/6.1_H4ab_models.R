@@ -166,9 +166,6 @@ saveRDS(redlist_final,
 
 # 3. BUILD THE REDLISTED RECORDS PER DATASET -----------------------------------
 
-# Get a unique list of the species in the red-list
-redlist_species <- unique(redlist_final$species)
-
 ## 3.1. Flag and keep red-listed occurrences -----------------------------------
 
 # Attach the category 
@@ -189,30 +186,37 @@ print(table(occ_join_rl$redlist_category))
 # 5501    671   7969 508868  42662  49631 
 
 # Save the red-listed occurrence-level join for H4d
-saveRDS(occ_join_rl,
+saveRDS(occ_assessed |> filter(group == "redlisted"),
         here("data", "derived_data", "h4_polygon_buffer_occurrence_join.rds"))
+saveRDS(occ_assessed |> filter(group == "LC_baseline"),
+        here("data", "derived_data",
+             "h4_LC_baseline_polygon_buffer_occurrence_join.rds"))
 
-## 3.2. Recompute per-side red-listed counts -----------------------------------
+## 3.2. Create a helper function to build a per-side df with category ----------
 
-# Count red-listed SOR and red-listed species per side
-redlist_counts <- occ_join_rl |>
-  group_by(poly_uid) |>
-  summarise(sor_redlist = n(),
-            n_species_redlist = n_distinct(species),
-            .groups = "drop")
+# Keep all sides
+build_side_data <- function(occ_assessed, model_data, keep_categories) {
+  counts <- occ_assessed |>
+    filter(redlist_category %in% keep_categories) |>
+    group_by(poly_uid) |>
+    summarise(sor = n(), nsp = n_distinct(species), .groups = "drop")
+  
+  model_data |>
+    select(poly_uid, id, pair_id, polygon_type, area_m2_numeric,
+           english_categories, kommune, land_cover_name, log_area) |>
+    left_join(counts, by = "poly_uid") |>
+    mutate(n_occurrences = coalesce(sor, 0L),
+           n_species = coalesce(nsp, 0L),
+           polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
+           land_cover_name = factor(land_cover_name),
+           kommune_factor = factor(kommune),
+           pair_id_factor = factor(pair_id)) |>
+    select(-sor, -nsp)
+}
 
-# Attach to the fulside frame so sides with no red-listed records become 0
-model_data_rl <- model_data |>
-  select(poly_uid, id, pair_id, polygon_type, area_m2_numeric,
-         english_categories, kommune, land_cover_name, log_area) |>
-  left_join(redlist_counts, by = "poly_uid") |>
-  mutate(n_occurrences = coalesce(sor_redlist, 0L),
-         n_species = coalesce(n_species_redlist, 0L),
-         polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
-         land_cover_name = factor(land_cover_name),
-         kommune_factor = factor(kommune),
-         pair_id_factor = factor(pair_id)) |>
-  select(-sor_redlist, -n_species_redlist)
+# Red-listed (primary) and LC baseline per-side datasets
+model_data_rl <- build_side_data(occ_assessed, model_data, redlisted_categories)
+model_data_lc <- build_side_data(occ_assessed, model_data, baseline_categories)
 
 ## 3.3. CHeck the red-listed side data -----------------------------------------
 
@@ -231,80 +235,79 @@ stopifnot(all(pair_counts$n_dev == 1 & pair_counts$n_buf == 1))
 cat("\nPASS: red-listed side data assembled, pairing intact\n") # PASS
 
 # Quickly inspect the data
-cat("\nMean red-listed SOR by side:\n")
-print(tapply(model_data_rl$n_occurrences, model_data_rl$polygon_type, mean))
-# Buffer Development 
-# 2.475828    2.261601 
-cat("Proportion of sides with zero red-listed records:",
-    round(mean(model_data_rl$n_occurrences == 0), 3), "\n") #0.905
+cat("\nRed-listed (CR/EN/VU/NT/DD):\n")
+cat("  mean SOR by side:\n"); print(tapply(model_data_rl$n_occurrences,
+                                           model_data_rl$polygon_type, mean))
+cat("  sides with >=1 record:", sum(model_data_rl$n_occurrences > 0),
+    "(", round(100 * mean(model_data_rl$n_occurrences > 0), 1), "%)\n")
+cat("LC baseline:\n")
+cat("  sides with >=1 record:", sum(model_data_lc$n_occurrences > 0),
+    "(", round(100 * mean(model_data_lc$n_occurrences > 0), 1), "%)\n")
 
 # Save the red-listed per-side dataset
 saveRDS(model_data_rl,
         here("data", "derived_data", "h4_polygon_buffer_data.rds"))
+saveRDS(model_data_lc,
+        here("data", "derived_data", "h4_LC_baseline_polygon_buffer_data.rds"))
 
 # 4. PREPARE DATA FOR MODELLING- -----------------------------------------------
 
-## 4.1. Reshape df to one row per polygon-buffer pair --------------------------
+## 4.1. Use a helper function to reshape a per-side dataset for both groups ----
 
-# Pivot to wide to get the polygon and buffer counts side by side
-pair_data <- model_data_rl |>
-  select(pair_id, kommune, english_categories, land_cover_name,
-         area_m2_numeric, polygon_type, n_occurrences) |>
-  tidyr::pivot_wider(names_from  = polygon_type,
-                     values_from = c(n_occurrences, area_m2_numeric)) |>
-  rename(sor_polygon = n_occurrences_Development,
-         sor_buffer = n_occurrences_Buffer,
-         area_polygon = area_m2_numeric_Development,
-         area_buffer = area_m2_numeric_Buffer)
+# One row per pair, polygon and buffer counts side by side
+make_pair_data <- function(side) {
+  side |>
+    select(pair_id, kommune, english_categories, land_cover_name,
+           area_m2_numeric, polygon_type, n_occurrences) |>
+    tidyr::pivot_wider(names_from  = polygon_type,
+                       values_from = c(n_occurrences, area_m2_numeric)) |>
+    rename(sor_polygon  = n_occurrences_Development,
+           sor_buffer   = n_occurrences_Buffer,
+           area_polygon = area_m2_numeric_Development,
+           area_buffer  = area_m2_numeric_Buffer) |>
+    mutate(sor_total = sor_polygon + sor_buffer,
+           # share of the SOR belonging to the polygon
+           share_polygon = ifelse(sor_total > 0, sor_polygon / sor_total, NA_real_),
+           # centred log polygon area so the intercept refers to an average pair
+           log_area_c = as.numeric(scale(log(area_polygon), scale = FALSE)),
+           # area offset to adjust the share for the polygon/buffer area difference
+           area_offset = log(area_polygon / area_buffer),
+           any_records = as.integer(sor_total > 0),
+           kommune_factor  = factor(kommune),
+           land_cover_name = factor(land_cover_name))
+}
 
-# Create the variables needed for the model
-pair_data <- pair_data |>
-  mutate(sor_total = sor_polygon + sor_buffer,
-         # share of the red-listed SOR belonging to the polygon
-         share_polygon = ifelse(sor_total > 0, sor_polygon / sor_total, NA_real_),
-         # centred log polygon area so the intercept in H4a refers to an average pair
-         log_area_c = as.numeric(scale(log(area_polygon), scale = FALSE)),
-         # area offset to adjust the share for the polygon/buffer area difference
-         area_offset = log(area_polygon / area_buffer),
-         # did this pair have any red-listed records at all? (presence response)
-         any_records = as.integer(sor_total > 0),
-         # factorise kommune and land-cover name
-         kommune_factor  = factor(kommune),
-         land_cover_name = factor(land_cover_name))
+# One row per side, presence flag for the group's records
+make_presence_data <- function(side) {
+  side |>
+    mutate(presence = as.integer(n_occurrences > 0),
+           polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
+           log_area_c = as.numeric(scale(log(area_m2_numeric), scale = FALSE)),
+           land_cover_name = factor(land_cover_name),
+           kommune_factor  = factor(kommune),
+           pair_id_factor  = factor(pair_id))
+}
 
-# Build the presence data and flag the presence of any red-listed record
-presence_data <- model_data_rl |>
-  mutate(presence = as.integer(n_occurrences > 0),
-         polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
-         # centred log area of THIS side (polygon or buffer)
-         log_area_c = as.numeric(scale(log(area_m2_numeric), scale = FALSE)),
-         land_cover_name = factor(land_cover_name),
-         kommune_factor  = factor(kommune),
-         pair_id_factor  = factor(pair_id))
+## 4.2. Reshape df -------------------------------------------------------------
 
-## 4.2. Check the reshaped df --------------------------------------------------
+# Use the function to reshape the data
+pair_data     <- make_pair_data(model_data_rl)
+presence_data <- make_presence_data(model_data_rl)
 
-# Check that there is exactly one row per pair
+# Check that we still have one row per pair
 stopifnot(nrow(pair_data) == n_distinct(model_data_rl$pair_id))
-cat("\nPairs after reshape:", nrow(pair_data), "\n") #129881
+cat("\nPairs after reshape:", nrow(pair_data), "\n")
 
-# Check that counts are complete and offset/area are finite everywhere
+# Make sure the counts are complete and the area values are finite
 stopifnot(!any(is.na(pair_data$sor_polygon)),
           !any(is.na(pair_data$sor_buffer)),
           all(is.finite(pair_data$area_offset)),
           all(is.finite(pair_data$log_area_c)))
-cat("PASS: counts complete and offset/area finite\n") # PASS
-
-# Checkt the response
+cat("PASS: counts complete and offset/area finite\n")
 cat("Pairs with any red-listed records:", sum(pair_data$any_records), "of",
-    nrow(pair_data), "(",
-    round(100 * mean(pair_data$any_records), 1), "%)\n") # PASS
-cat("Pairs with zero red-listed records in BOTH halves:",
-    sum(pair_data$sor_total == 0), "\n") #111222 
+    nrow(pair_data), "(", round(100 * mean(pair_data$any_records), 1), "%)\n")
 cat("Polygon share of red-listed records (record-bearing pairs only):\n")
 print(summary(pair_data$share_polygon))
-# Min. 1st Qu.  Median    Mean 3rd Qu.    Max.     NAs 
-# 0.0000  0.0000  0.1907  0.3939  0.9640  1.0000  111222 
 
 # 5. FIT MODELS  ---------------------------------------------------------------
 
@@ -312,15 +315,9 @@ print(summary(pair_data$share_polygon))
 pair_records <- pair_data |>
   filter(sor_total > 0) |>
   droplevels()   # drop any land-cover / kommune levels with no record-bearing pairs
-cat("\nPairs entering the split model (H4a / H4b):", nrow(pair_records), "\n") # 18659
-
-# Check how many record there are per land-cover
+cat("\nPairs entering the split model (H4a / H4b):", nrow(pair_records), "\n")
 cat("Record-bearing pairs by land cover:\n")
 print(table(pair_records$land_cover_name))
-# Cropland             Forest          Grassland          Heathland        Settlements Sparsely_vegetated 
-# 1867              12037                439               1397               2237                361 
-# Wetlands 
-# 321 
 
 ## 5.1. H4ab split model with full interaction ---------------------------------
 
@@ -350,9 +347,6 @@ save(h4ab_betabin_additive,
 
 # Compare the models
 AICtab(h4ab_betabin_full, h4ab_betabin_additive, base = TRUE)
-#                       AIC     dAIC    df
-# h4ab_betabin_additive 64731.3     0.0 10
-# h4ab_betabin_full     64738.9     7.5 16
 
 # Pick the better model
 best_split <- h4ab_betabin_additive
@@ -385,9 +379,6 @@ save(h4_presence_additive,
 
 # Compare the models
 AICtab(h4_presence_full, h4_presence_additive, base = TRUE)
-#                      AIC      dAIC     df
-# h4_presence_full     118338.6      0.0 18
-# h4_presence_additive 118498.8    160.2 11
 
 # Use the better presence model
 best_presence <- h4_presence_full
@@ -490,6 +481,30 @@ print(random_effects_presence)
 
 # 9. HYPOTHESIS TESTING --------------------------------------------------------
 
+# Define functions to extract model output for the least concern (LC) baseline comparisons 
+share_estimate <- function(split_model) {
+  d <- as.data.frame(emmeans(split_model, ~ 1, offset = 0, type = "response"))
+  c(estimate = d$prob,
+    lower = d[[grep("LCL|lower", names(d), value = TRUE)[1]]],
+    upper = d[[grep("UCL|upper", names(d), value = TRUE)[1]]])
+}
+slope_estimate <- function(split_model) {
+  d <- as.data.frame(emtrends(split_model, ~ 1, var = "log_area_c"))
+  tcol <- grep("trend", names(d), value = TRUE)[1]
+  c(estimate = d[[tcol]],
+    lower = d[[grep("LCL|lower", names(d), value = TRUE)[1]]],
+    upper = d[[grep("UCL|upper", names(d), value = TRUE)[1]]])
+}
+presence_or <- function(presence_model) {
+  emm <- emmeans(presence_model, ~ polygon_type, type = "response")
+  d   <- as.data.frame(confint(contrast(emm, method = "revpairwise",
+                                        type = "response")))
+  ocol <- grep("ratio|estimate", names(d), value = TRUE)[1]
+  c(estimate = d[[ocol]],
+    lower = d[[grep("LCL|lower", names(d), value = TRUE)[1]]],
+    upper = d[[grep("UCL|upper", names(d), value = TRUE)[1]]])
+}
+
 ## 9.1. H4a - is the polygon share of red-listed SOR above 0.5? ----------------
 
 # Average share of SOR over land-cover (a value of 0.5 = no difference in density)
@@ -523,7 +538,7 @@ if (ci_lo > 0.5) {
 } else {
   cat("\nH4a inconclusive: the CI for the polygon share includes 0.5.\n")
 }
-##H4a NOT supported: the share lies below 0.5 (buffers hold more)
+# H4a NOT supported: the share lies below 0.5 (buffers hold more)
 
 ## 9.2. H4b - does the share of red-listed SOR increase with area? -------------
 cat("\nH4b: red-listed SOR rises with area faster inside polygons than outside.\n")
@@ -648,7 +663,7 @@ pretty_lc <- function(x) {
 
 # Predict values
 predictions_split <- ggpredict(best_split,
-                               terms = c("log_area_c [all]", "land_cover_name"),
+                               terms     = c("log_area_c [all]", "land_cover_name"),
                                condition = c(area_offset = 0))
 
 # Convert to df
@@ -777,5 +792,68 @@ ggsave(filename = here("figures", "Figure_H4_presence_by_side_and_landcover.png"
        plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
 ggsave(filename = here("figures", "Figure_H4_presence_by_side_and_landcover.pdf"),
        plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
+
+## 11. LEAST CONCERN (LC) BASELINE MODELS --------------------------------------
+
+# Fit models with the same form as the previous red-listed models (i.e. one beta binomial split model and one presence model)
+# Shape dfs
+pair_data_lc     <- make_pair_data(model_data_lc)
+presence_data_lc <- make_presence_data(model_data_lc)
+
+# Remove the pairs where both polygons and buffers are empty
+pair_records_lc <- pair_data_lc |>
+  filter(sor_total > 0) |>
+  droplevels()
+cat("\nLC baseline: pairs entering the split model:", nrow(pair_records_lc), "\n")
+
+# Run the split model
+lc_split <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
+                      log_area_c + land_cover_name +
+                      offset(area_offset) + (1 | kommune_factor),
+                    data = pair_records_lc,
+                    family = betabinomial)
+
+# Save to file
+save(lc_split, file = here::here("data", "models", "h4_LC_baseline_betabin.RData"))
+
+# Run the presence model
+lc_presence <- glmmTMB(presence ~ polygon_type * (log_area_c + land_cover_name) +
+                         (1 | kommune_factor/pair_id_factor),
+                       data   = presence_data_lc,
+                       family = binomial)
+
+# Save model output
+save(lc_presence, file = here::here("data", "models", "h4_LC_baseline_presence.RData"))
+saveRDS(list(share = share_estimate(lc_split),
+             slope = slope_estimate(lc_split),
+             presence_or = presence_or(lc_presence)),
+        here("data", "models", "h4_LC_baseline_inference.rds"))
+
+# 12. COMPARE RED-LISTED AND LEAST CONCERN BASELINE ----------------------------
+
+# Assemble metrics side by side
+row_from <- function(group, metric, v) {
+  data.frame(group = group, metric = metric,
+             estimate = unname(v["estimate"]),
+             lower = unname(v["lower"]),
+             upper = unname(v["upper"]))
+}
+
+comparison_h4ab <- bind_rows(row_from("Red-listed (CR/EN/VU/NT/DD)", "Polygon share", share_estimate(best_split)),
+                             row_from("LC baseline", "Polygon share", share_estimate(lc_split)),
+                             row_from("Red-listed (CR/EN/VU/NT/DD)", "Area slope (logit)", slope_estimate(best_split)),
+                             row_from("LC baseline", "Area slope (logit)", slope_estimate(lc_split)),
+                             row_from("Red-listed (CR/EN/VU/NT/DD)", "Presence OR (Dev/Buffer)", presence_or(best_presence)),
+                             row_from("LC baseline", "Presence OR (Dev/Buffer)", presence_or(lc_presence))) |>
+  mutate(across(c(estimate, lower, upper), \(x) round(x, 3))) |>
+  arrange(metric, group)
+
+# Print summary
+print(comparison_h4ab)
+
+# Save to file
+write.csv(comparison_h4ab,
+          here("figures", "Table_H4ab_redlisted_vs_LC_baseline.csv"),
+          row.names = FALSE)
 
 # END OF SCRIPT ----------------------------------------------------------------
