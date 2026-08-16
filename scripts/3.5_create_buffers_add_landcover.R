@@ -115,8 +115,8 @@ stopifnot(st_crs(development_polygons) == st_crs(polygon_buffers),
 cat("\nPASS: all layers share the same CRS\n") # PASS
 
 # Check that the transformation went well and all layers still overlap in space
-print(rbind(polygons   = st_bbox(development_polygons),
-            buffers    = st_bbox(polygon_buffers),
+print(rbind(polygons = st_bbox(development_polygons),
+            buffers = st_bbox(polygon_buffers),
             land_cover = st_bbox(land_cover)))
 
 if (length(st_intersection(st_as_sfc(st_bbox(development_polygons)),
@@ -135,7 +135,7 @@ development_polygons_temp <- development_polygons |>
 # Calculate area_m2_numeric from the geomtry (st_area) and not from planlagt_areal_m2
 # see script 3.5_polygons_area_checks for details
 development_polygons_temp <- development_polygons_temp |>
-  mutate(area_m2_numeric         = as.numeric(st_area(development_polygons_temp)),
+  mutate(area_m2_numeric = as.numeric(st_area(development_polygons_temp)),
          planlagt_area_reference = as.numeric(planlagt_areal_m2),
          english_categories = case_when(arealformalsgruppe == "01 Bolig eller sentrumsformål" ~ "Residential",
                                         arealformalsgruppe == "02 Fritidsbebyggelse" ~ "Recreational",
