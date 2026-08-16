@@ -3,8 +3,7 @@
 # 6.2_H4c_models
 # This script contains code to test H4a: Area plan polygons have a
 # greater number of red-listed SOR than areas not planned for development, and
-# H4b: Completeness of red-listed SOR will be greater within development
-# polygons than outside
+# H4c: Polygons will have higher richness of Red-listed species than buffers 
 ##----------------------------------------------------------------------------#
 
 # 1. LOAD DATA -----------------------------------------------------------------
