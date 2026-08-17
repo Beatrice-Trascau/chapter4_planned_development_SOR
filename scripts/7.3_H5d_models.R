@@ -354,4 +354,260 @@ if (pair_var_near_zero(h5d_ice_time_model1)) {
                                  family = ordbeta(link = "logit"))
 }
 
+# 7. MODEL SUMMARY -------------------------------------------------------------
 
+## 7.1. Chao1 ------------------------------------------------------------------
+
+# Quick summary
+print(summary(chao1_final))
+
+# Check convergence
+if (chao1_final$sdr$pdHess) {
+  cat("\nChao1 headline model converged successfully\n")
+} else {
+  cat("\nWarning: Chao1 headline model may not have converged\n")
+} # Chao1 headline model converged successfully
+
+# Create a tidy coefficient table to use in the manuscript
+coef_table_h5d <- broom.mixed::tidy(chao1_final, effects = "fixed", conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 4), SE = round(std.error, 4),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 4))) |>
+  select(Term = term, Estimate, SE, `z value`, `p value`)
+
+# Save to file 
+write.csv(coef_table_h5d,
+          here("figures", "Table_H5d_Chao1_coefficients.csv"), row.names = FALSE)
+
+## 7.2. ICE-time ---------------------------------------------------------------
+
+# Quick summary
+print(summary(h5d_ice_time_model1))
+
+# Check convergence
+if (h5d_ice_time_model1$sdr$pdHess) {
+  cat("\nICE-time model converged successfully\n")
+} else {
+  cat("\nWarning: ICE-time model may not have converged\n")
+}
+
+# Create a tidy coefficient table to use in the manuscript
+coef_table_h5d_ice <- broom.mixed::tidy(h5d_ice_time_model1, effects = "fixed",
+                                        conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 4), SE = round(std.error, 4),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 4))) |>
+  select(Term = term, Estimate, SE, `z value`, `p value`)
+
+# Save to file
+write.csv(coef_table_h5d_ice,
+          here("figures", "Table_H5d_ICE_additive_coefficients.csv"), row.names = FALSE)
+
+# 8. MODEL DIAGNOSTICS ---------------------------------------------------------
+
+## 8.1. Chao1 model ------------------------------------------------------------
+
+# Simulate residuals 
+sim_residuals_h5d_chao1 <- simulateResiduals(fittedModel = chao1_final, n = 1000)
+
+# Plot diagnostics
+png(filename = here("figures", "Figure_H5d_Chao1_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_h5d_chao1)
+dev.off()
+
+# Check dispersion
+print(testDispersion(sim_residuals_h5d_chao1))
+
+# Check outliers
+print(testOutliers(sim_residuals_h5d_chao1))
+
+## 8.2. ICE-time ---------------------------------------------------------------
+
+# Simulate residuals 
+sim_residuals_h5d_ice <- simulateResiduals(fittedModel = h5d_ice_time_model1, n = 1000)
+
+# Plot diagnostics
+png(filename = here("figures", "Figure_H5d_ICE_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_h5d_ice)
+dev.off()
+
+# Check dispersion
+print(testDispersion(sim_residuals_h5d_ice))
+
+# Check outliers
+print(testOutliers(sim_residuals_h5d_ice))
+
+# 9. MODEL PREDICTION FIGURES --------------------------------------------------
+
+# Define colour scheme
+polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
+
+# Function to extract predictions
+make_pred_df <- function(model, data) {
+  pred <- ggpredict(model,
+                    terms = c("log_area_km2 [n=100]", "polygon_type", "land_cover_name"),
+                    type  = "fixed")
+  pred_df <- as.data.frame(pred) |>
+    rename(log_area_km2 = x, polygon_type = group, land_cover_name = facet)
+  ranges <- data |>
+    group_by(land_cover_name, polygon_type) |>
+    summarise(lo = min(log_area_km2), hi = max(log_area_km2), .groups = "drop")
+  pred_df |>
+    left_join(ranges, by = c("land_cover_name", "polygon_type")) |>
+    filter(log_area_km2 >= lo, log_area_km2 <= hi) |>
+    select(-lo, -hi)
+}
+
+# Function to plot predictions
+completeness_figure <- function(pred_df) {
+  ggplot(pred_df, aes(x = log_area_km2, y = predicted,
+                      colour = polygon_type, fill = polygon_type)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+    geom_line(linewidth = 1.2) +
+    facet_wrap(~land_cover_name, ncol = 3, labeller = as_labeller(pretty_lc)) +
+    scale_colour_manual(values = polygon_colours, name = "Area Type") +
+    scale_fill_manual(values = polygon_colours, name = "Area Type") +
+    scale_y_continuous(labels = scales::percent) +
+    labs(x = expression(paste("Log(Area (km"^2, "))")),
+         y = "Estimated Alien Species Completeness") +
+    theme_classic() +
+    theme(panel.grid = element_blank(), axis.title = element_text(size = 14),
+          axis.text = element_text(size = 12), legend.position = "bottom",
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 12, face = "bold"))
+}
+
+## 9.1. Chao1 model ------------------------------------------------------------
+
+# Predict values
+pred_df_chao1 <- make_pred_df(chao1_final, chao1_final_data)
+
+# Plot predictions
+fig_chao1_predictions <- completeness_figure(pred_df_chao1)
+
+# Save figure to file
+ggsave(here("figures", "Figure_H5d_chao1_predictions.png"),
+       fig_chao1_predictions, width = 14, height = 10, dpi = 600)
+ggsave(here("figures", "Figure_H5d_chao1_predictions.pdf"),
+       fig_chao1_predictions, width = 14, height = 10, dpi = 600)
+
+## 9.2. ICE-time model ---------------------------------------------------------
+
+# Predict values
+pred_df_ice <- make_pred_df(h5d_ice_time_model1, model_data_ice_time)
+
+# Plot predictions
+fig_ice_predictions <- completeness_figure(pred_df_ice)
+
+# Save figure to file
+ggsave(here("figures", "Figure_H5d_ICE_predictions.png"),
+       fig_ice_predictions, width = 14, height = 10, dpi = 600)
+ggsave(here("figures", "Figure_H5d_ICE_predictions.pdf"),
+       fig_ice_predictions, width = 14, height = 10, dpi = 600)
+
+# 10. HYPOTHESIS TESTING -------------------------------------------------------
+
+## 10.1. Chao1 model -----------------------------------------------------------
+
+# Get marginal means for polygon type averaged across land-cover and area
+emmeans_polygon_h5d_chao1 <- emmeans(chao1_final, specs = "polygon_type",
+                                     type = "response")
+
+# Get summary
+cat("Estimated alien completeness by side (Chao1):\n")
+print(summary(emmeans_polygon_h5d_chao1))
+# polygon_type response     SE  df asymp.LCL asymp.UCL
+# Buffer          0.518 0.0338 Inf     0.451     0.583
+# Development     0.505 0.0340 Inf     0.439     0.571
+
+# Calculate pairwise contrast
+contrast_polygon_h5d_chao1 <- contrast(emmeans_polygon_h5d_chao1,
+                                       method = "revpairwise", type = "response")
+
+# Check summary of contrast
+cat("\nDevelopment vs Buffer (Chao1 alien completeness):\n")
+print(summary(contrast_polygon_h5d_chao1, infer = TRUE))
+# contrast             odds.ratio     SE  df asymp.LCL asymp.UCL null z.ratio p.value
+# Development / Buffer      0.951 0.0745 Inf     0.816      1.11    1  -0.637  0.5240
+
+# Hypothesis verdict from the odds-ratio CI
+con_df <- as.data.frame(confint(contrast_polygon_h5d_chao1))
+or_col <- grep("ratio|estimate", names(con_df), value = TRUE)[1]
+or_lo  <- con_df[[grep("LCL|lower", names(con_df), value = TRUE)[1]]]
+or_hi  <- con_df[[grep("UCL|upper", names(con_df), value = TRUE)[1]]]
+cat(sprintf("\nChao1 completeness OR (Development / Buffer): %.3f  [%.3f, %.3f]\n",
+            con_df[[or_col]], or_lo, or_hi))
+if (or_lo > 1) {
+  cat("H5d SUPPORTED (Chao1): development polygons have higher alien completeness.\n")
+} else if (or_hi < 1) {
+  cat("H5d NOT supported (Chao1): development polygons have LOWER completeness.\n")
+} else {
+  cat("H5d inconclusive (Chao1): the completeness OR CI includes 1.\n")
+} # H5d inconclusive (Chao1): the completeness OR CI includes 1.
+
+## 10.2. ICE-time model --------------------------------------------------------
+
+# Get marginal means for polygon type averaged across land-cover and area
+emmeans_polygon_h5d_ice <- emmeans(h5d_ice_time_model1, specs = "polygon_type",
+                                   type = "response")
+
+# Get summary
+cat("\nEstimated alien completeness by side (ICE-time):\n")
+print(summary(emmeans_polygon_h5d_ice))
+# polygon_type response     SE  df asymp.LCL asymp.UCL
+# Buffer          0.273 0.0218 Inf     0.233     0.318
+# Development     0.281 0.0250 Inf     0.235     0.333
+
+# Calculate pairwise contrast
+contrast_polygon_h5d_ice <- contrast(emmeans_polygon_h5d_ice,
+                                     method = "revpairwise", type = "response")
+
+# Check summary of contrast
+cat("\nDevelopment vs Buffer (ICE-time alien completeness):\n")
+print(summary(contrast_polygon_h5d_ice, infer = TRUE))
+# contrast             odds.ratio     SE  df asymp.LCL asymp.UCL null z.ratio p.value
+# Development / Buffer       1.04 0.0976 Inf     0.867      1.25    1   0.434  0.6645
+
+# Save inference objects
+saveRDS(list(chao1_by_side  = emmeans_polygon_h5d_chao1,
+             chao1_contrast = contrast_polygon_h5d_chao1,
+             ice_by_side    = emmeans_polygon_h5d_ice,
+             ice_contrast   = contrast_polygon_h5d_ice),
+        here("data", "models", "h5d_completeness_emmeans.rds"))
+
+## 10.3. Check robustness across estimators ------------------------------------
+
+# Pull the polygon vs buffer completeness odds ration from every fitted estimator into one table so we can check
+# if the direction and significance (or lack thereof) hold across the estimators
+completeness_contrast <- function(model, label) {
+  emm <- emmeans(model, specs = "polygon_type", type = "response")
+  d <- as.data.frame(confint(contrast(emm, method = "revpairwise", type = "response")))
+  or_col <- grep("ratio|estimate", names(d), value = TRUE)[1]
+  or <- d[[or_col]]
+  lo <- d[[grep("LCL|lower", names(d), value = TRUE)[1]]]
+  hi <- d[[grep("UCL|upper", names(d), value = TRUE)[1]]]
+  data.frame(estimator = label,
+             OR = round(or, 3), lower = round(lo, 3), upper = round(hi, 3),
+             verdict = if (lo > 1) "higher in polygons"
+             else if (hi < 1) "lower in polygons"
+             else "inconclusive")
+}
+
+# Combine the estimator comparisons
+completeness_comparison <- bind_rows(completeness_contrast(chao1_final, "Chao1 (abundance)"),
+                                     completeness_contrast(h5d_ice_time_model1, "ICE-time (incidence)"))
+
+# Print the comparisons
+print(completeness_comparison)
+# estimator    OR lower upper      verdict
+# 1    Chao1 (abundance) 0.951 0.816 1.109 inconclusive
+# 2 ICE-time (incidence) 1.041 0.867 1.251 inconclusive
+
+# Save comparison
+write.csv(completeness_comparison,
+          here("figures", "Table_H5d_completeness_estimator_comparison.csv"),
+          row.names = FALSE)
+
+# END OF SCRIPT ----------------------------------------------------------------
