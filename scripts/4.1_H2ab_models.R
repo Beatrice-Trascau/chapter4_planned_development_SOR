@@ -270,11 +270,11 @@ emm_overall <- emmeans(best_split, ~ 1, offset = 0, type = "response")
 cat("Estimated polygon share of records (averaged over land cover):\n")
 print(summary(emm_overall))
 
-# Get estimate and confidence interval and convert it to scales you can report
-emm_df   <- as.data.frame(emm_overall)
-pi_hat   <- emm_df$prob
-ci_lo    <- emm_df[[grep("LCL|lower", names(emm_df), value = TRUE)[1]]]
-ci_hi    <- emm_df[[grep("UCL|upper", names(emm_df), value = TRUE)[1]]]
+# Get estimate and confidence interval and convert it to scales that can be used in the manuscript
+emm_df <- as.data.frame(emm_overall)
+pi_hat <- emm_df$prob
+ci_lo <- emm_df[[grep("LCL|lower", names(emm_df), value = TRUE)[1]]]
+ci_hi <- emm_df[[grep("UCL|upper", names(emm_df), value = TRUE)[1]]]
 
 to_ratio <- function(p) p / (1 - p)
 to_index <- function(p) 2 * p - 1
@@ -307,11 +307,11 @@ cat("Average effect of log(area) on the polygon share (logit scale):\n")
 print(summary(slope_overall))
 
 # Extract slope confidence intervals
-slope_df  <- as.data.frame(slope_overall)
+slope_df <- as.data.frame(slope_overall)
 trend_col <- grep("trend", names(slope_df), value = TRUE)[1]
-slo_lo    <- slope_df[[grep("LCL|lower", names(slope_df), value = TRUE)[1]]]
-slo_hi    <- slope_df[[grep("UCL|upper", names(slope_df), value = TRUE)[1]]]
-slo_est   <- slope_df[[trend_col]]
+slo_lo <- slope_df[[grep("LCL|lower", names(slope_df), value = TRUE)[1]]]
+slo_hi <- slope_df[[grep("UCL|upper", names(slope_df), value = TRUE)[1]]]
+slo_est <- slope_df[[trend_col]]
 
 cat(sprintf("\nArea slope: %.3f  [%.3f, %.3f]\n", slo_est, slo_lo, slo_hi))
 if (slo_lo > 0) {
