@@ -259,19 +259,148 @@ h5ab_betabin_full <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
 save(h5ab_betabin_full,
      file = here::here("data", "models", "h5ab_betabin_full.RData"))
 
+## 5.2. H5ab split additive model ----------------------------------------------
 
+# Set up the model
+h5ab_betabin_additive <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
+                                   log_area_c + land_cover_name +
+                                   offset(area_offset) + (1 | kommune_factor),
+                                 data = pair_records, family = betabinomial)
 
+# Save the model output
+save(h5ab_betabin_additive,
+     file = here::here("data", "models", "h5ab_betabin_additive.RData"))
 
+# Compare models
+AICtab(h5ab_betabin_full, h5ab_betabin_additive, base = TRUE)
+#                       AIC     dAIC    df
+# h5ab_betabin_additive 20685.1     0.0 10
+# h5ab_betabin_full     20691.1     6.1 16
 
+# Use the model with lower AIC
+best_split <- h5ab_betabin_additive
 
+## 5.3. H5 presence model with full interaction --------------------------------
 
+# Define model
+h5_presence_full <- glmmTMB(presence ~ polygon_type * (log_area_c + land_cover_name) +
+                              (1 | kommune_factor/pair_id_factor),
+                            data = presence_data, family = binomial)
 
+# Save model output
+save(h5_presence_full,
+     file = here::here("data", "models", "h5_presence_full.RData"))
 
+## 5.4. H5 additive presence model ---------------------------------------------
 
+# Define model
+h5_presence_additive <- glmmTMB(presence ~ polygon_type + log_area_c +
+                                  land_cover_name +
+                                  (1 | kommune_factor/pair_id_factor),
+                                data = presence_data, family = binomial)
 
+# Save model output
+save(h5_presence_additive,
+     file = here::here("data", "models", "h5_presence_additive.RData"))
 
+# Compare models
+AICtab(h5_presence_full, h5_presence_additive, base = TRUE)
+#                      AIC     dAIC    df
+# h5_presence_full     59369.7     0.0 18
+# h5_presence_additive 59824.3   454.6 11
 
+# Use the model with lower AIC
+best_presence <- h5_presence_full
 
+# 6. ALL ALIENS MODEL SUMMARIES ------------------------------------------------
 
+## 6.1. All aliens split model -------------------------------------------------
 
+# Quick look at the summary 
+print(summary(best_split))
+
+# Create tidy coefficient table to use in manuscript 
+coef_table_split <- broom.mixed::tidy(best_split, effects = "fixed",
+                                      conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 3), SE = round(std.error, 3),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
+  select(Term = term, Estimate, SE, `z value`, `p value`)
+
+# Save the tidy table
+write.csv(coef_table_split,
+          here("figures", "Table_H5ab_split_model_coefficients.csv"),
+          row.names = FALSE)
+
+## 6.2. All aliens presence model ----------------------------------------------
+
+# Summary
+print(summary(best_presence))
+
+# Tidy coeffiecint table
+coef_table_presence <- broom.mixed::tidy(best_presence, effects = "fixed",
+                                         conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 3), SE = round(std.error, 3),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 3))) |>
+  select(Term = term, Estimate, SE, `z value`, `p value`)
+
+# Save the dify table
+write.csv(coef_table_presence,
+          here("figures", "Table_H5_presence_model_coefficients.csv"),
+          row.names = FALSE)
+
+# 7. ALL ALIENS MODEL DIAGNOSTICS ----------------------------------------------
+
+## 7.1. All aliens split model -------------------------------------------------
+
+# Simulate residuals
+sim_residuals_split <- simulateResiduals(fittedModel = best_split, n = 1000)
+
+# Create diagnostic plots
+png(filename = here("figures", "Figure_H5ab_betabinomial_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_split)
+dev.off()
+
+# Test dispersion
+print(testDispersion(sim_residuals_split))
+
+# Test outliers
+print(testOutliers(sim_residuals_split))
+
+## 7.2. All aliens presence model ----------------------------------------------
+
+# Simulate residuals
+sim_residuals_presence <- simulateResiduals(fittedModel = best_presence, n = 1000)
+
+# Create diagnostic plots
+png(filename = here("figures", "Figure_H5_presence_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_presence)
+dev.off()
+
+# Test dispersion
+print(testDispersion(sim_residuals_presence))
+
+# 8. EXTRACT RANDOM EFFECTS ----------------------------------------------------
+
+# Extract random effects for the split model
+cat("\n=== H5a/H5b random effects (kommune) ===\n")
+print(VarCorr(best_split))
+# Conditional model:
+# Groups         Name        Std.Dev.
+# kommune_factor (Intercept) 0.32237 
+
+# Extract random effects for the presence model
+cat("\n=== H5 presence random effects (kommune / pair) ===\n")
+print(VarCorr(best_presence))
+# Conditional model:
+# Groups                        Name        Std.Dev.
+# pair_id_factor:kommune_factor (Intercept) 10.72053
+# kommune_factor                (Intercept)  0.13531
+
+# 9. ALL ALIENS MODELS HYPOTHESIS TESTING --------------------------------------
+
+## 9.1. H5a - is the polygon share of alien SOR above 0.5? ---------------------
 
