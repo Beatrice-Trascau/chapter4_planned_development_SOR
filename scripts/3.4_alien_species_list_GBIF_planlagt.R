@@ -16,8 +16,11 @@ source(here("scripts", "0_setup.R"))
 alien_list_raw <- read_excel(here("data", "raw_data", "fremmedartslista-2023.xlsx"))
 
 # Load polygon all data (needed for species-based figures)
-polygon_all_data <- readRDS(here("data", "derived_data",
-                                 "polygons_occurrences_all_data.rds"))
+model_data <- readRDS(here("data", "derived_data", "h2_polygon_buffer_data.rds"))
+
+# Load the occurrence-level join
+occurrence_join <- readRDS(here("data", "derived_data",
+                                "h2d_polygon_buffer_occurrence_join.rds"))
 
 # 2. PREPARE ALIEN SPECIES LIST ------------------------------------------------
 
@@ -27,14 +30,16 @@ polygon_all_data <- readRDS(here("data", "derived_data",
 # Filter to only assessed alien species (exclude if needed based on status)
 alien_clean <- alien_list_raw |>
   filter(`Vurderingsområde` == "Fastlands-Norge med havområder") |>
-  select(scientific_name  = `Vitenskapelig navn`,
-         risk_category    = `Risikokategori 2023`) |>
+  select(scientific_name = `Vitenskapelig navn`,
+         risk_category = `Risikokategori 2023`) |>
   # Remove any duplicate species entries keeping first occurrence
   distinct(scientific_name, .keep_all = TRUE)
 
 cat("Alien species (mainland Norway):", nrow(alien_clean), "\n")
 cat("Risk category breakdown:\n")
 print(table(alien_clean$risk_category))
+# HI   LO   NK   NR   PH   SE 
+# 208 1141  337 2483  373  234 
 
 ## 2.2. Harmonise species names with GBIF backbone ----------------------------
 
@@ -73,7 +78,7 @@ if (file.exists(here("data", "derived_data", "alien_backbone_lookup.rds"))) {
 # Join backbone results back to alien list
 alien_harmonised <- alien_clean |>
   mutate(gbif_species = backbone_lookup$species,
-         match_type   = backbone_lookup$matchType) |>
+         match_type = backbone_lookup$matchType) |>
   # Keep original name where GBIF match is unavailable
   mutate(gbif_species = ifelse(is.na(gbif_species),
                                scientific_name, gbif_species))
@@ -81,61 +86,83 @@ alien_harmonised <- alien_clean |>
 # Check match quality
 cat("\nMatch type breakdown:\n")
 print(table(alien_harmonised$match_type))
+# EXACT      FUZZY HIGHERRANK       NONE 
+# 4722         16         33          5 
 
-## 2.3. Fix fuzzy and higher rank matches --------------------------------------
+## 2.3. Resolve non-exact matches ----------------------------------------------
 
-# Get the species that had a fuzzy match
-fuzzy_aliens <- alien_harmonised |>
-  filter(match_type == "FUZZY")
-# manual check revealed all fuzzy matches should be accepted except for scientific_name = Chinemys reevesi
+# Using the manual harmonisation spreadsheet and build the clean alien list
+  # EXACT matches  -> kept automatically
+  # Accepted = Yes -> New Name if one is given, otherwise the GBIF name
+  # Accepted = No  -> dropped
 
-# Get the species that had a higherrank match
-higherrank_aliens <- alien_harmonised |>
-  filter(match_type == "HIGHERRANK")
+# Use a helper function to clean the whitespaces in the spreadsheet
+clean_name <- function(x) {
+  x <- gsub("\u00a0", " ", x)   # non-breaking space -> normal space
+  x <- gsub("\\s+", " ", x)     # collapse repeated whitespace
+  trimws(x)
+}
 
-# Get the species without any matches
-none_aliens <- alien_harmonised |>
-  filter(match_type == "NONE")
+# Accept EXACT matches automatically
+alien_exact <- alien_harmonised |>
+  filter(match_type == "EXACT") |>
+  transmute(gbif_species  = clean_name(gbif_species),
+            risk_category = risk_category)
 
-# Keep only exact matches and remove duplicate GBIF species for preliminary analysis
-alien_cleaned <- alien_harmonised |>
-  filter(match_type %in% c("EXACT", "FUZZY", "HIGHERRANK"),
-         scientific_name != c("Charybdis (Goniohellenus) longicollis subsp. longicollis",
-                              "Chinemys reevesi", "Cotoneaster pyrenaicus",
-                              "Heracleum ’Kungsholm’", "Onchocleidus sp.",
-                              "Psyllipsocus (Psyllipsocus s.str.) ramburii",
-                              "Rubus fruticosus agg. 'Thornless Evergreen'",
-                              "Salix ×pentandroides")) |>
-  mutate(gbif_species = case_when(scientific_name == "Amelanchier spicata" ~ "Amelanchier humilis",
-                                  scientific_name == "Anemone narcissiflora" ~ "Anemonastrum narcissiflorum",
-                                  scientific_name == "Aristolochia macrophylla" ~ "Isotrema macrophyllum",
-                                  scientific_name == "Cleome spinosa" ~ "Tarenaya spinosa",
-                                  scientific_name == "Daucus carota subsp. sativus" ~ "Daucus carota",
-                                  scientific_name == "Elodea canadensis" ~ "Elodea canadensis",
-                                  scientific_name == "Erica herbacea" ~ "Erica carnea",
-                                  scientific_name == "Festuca rubra subsp. commutata" ~ "Festuca nigrescens",
-                                  scientific_name == "Herdmania momus subsp. momus" ~ "Herdmania momus",
-                                  scientific_name == "Iris latifolia" ~ "Iris jacquinii",
-                                  scientific_name == "Leontodon saxatilis" ~ "Thrincia saxatilis",
-                                  scientific_name == "Lotus glaber" ~ "Lotus tenuis",
-                                  scientific_name == "Lycopersicon esculentum" ~ "Solanum lycopersicum",
-                                  scientific_name == "Medicago glomerata" ~ "Medicago sativa",
-                                  scientific_name == "Myrica pensylvanica" ~ "Morella pensylvanica",
-                                  scientific_name == "Oenothera lamarckiana" ~ "Oenothera grandiflora",
-                                  scientific_name == "Physalis ixocarpa" ~ "Physalis philadelphica",
-                                  scientific_name == "Populus balsamifera 'Elongata'" ~ "Populus trichocarpa",
-                                  scientific_name == "Populus balsamifera 'Hortensis'" ~ "Populus balsamifera",
-                                  scientific_name == "Populus balsamifera 'Tristis''" ~ "Populus balsamifera",
-                                  scientific_name == "Pyrus communis subsp. pyraster" ~ "Pyrus pyraster",
-                                  scientific_name == "Rubus glandulosus" ~ "Rubus hirtus",
-                                  scientific_name == "Sanguisorba canadensis subsp. canadensis" ~ "Sanguisorba canadensis",
-                                  scientific_name == "Silene multifida" ~ "Silene macrophylla",
-                                  scientific_name == "Vulpia ciliata" ~ "Festuca ambigua",
-                                  scientific_name == "Vulpia myuros" ~ "Festuca myuros",
-                                  TRUE ~ gbif_species)) |>
+# Load the manually-resolved disagreements (Fuzzy/Higherrank/None)
+manual_path <- here("data", "raw_data", "Species_Taxonomic_Harmonisation.xlsx")
+if (!file.exists(manual_path)) stop("Harmonisation spreadsheet not found: ", manual_path)
+alien_manual_raw <- read_excel(manual_path, sheet = "Alien Species")
+
+# New-Name tokens that mean "exclude", not a replacement name
+drop_tokens <- c("-", "remove", "exclude")
+
+# Clean the alien list
+alien_manual <- alien_manual_raw |>
+  rename(scientific_name = `Alien Species List Name (Scientific Name)`,
+         risk_category = `Risk Category`,
+         gbif_name = `GBIF Species Name`,
+         match_type = `Match Type`,
+         accepted = `Accepted?`,
+         new_name = `New Name?`) |>
+  mutate(accepted = tolower(trimws(accepted)),
+         gbif_name = clean_name(gbif_name),
+         new_name = clean_name(new_name),
+         has_new = !is.na(new_name) & nzchar(new_name) &
+           !tolower(new_name) %in% drop_tokens) |>
+  # Accepted = Yes only; New Name overrides the GBIF name when a real one is given
+  filter(accepted == "yes") |>
+  mutate(gbif_species = ifelse(has_new, new_name, gbif_name)) |>
+  transmute(gbif_species, risk_category)
+
+# Check that every non-EXACT match should be represented in the spreadsheet (so that it is not silently dropped from the list)
+non_exact_names <- alien_harmonised |>
+  filter(match_type != "EXACT") |>
+  pull(scientific_name) |>
+  clean_name() |>
+  tolower()
+sheet_names <- alien_manual_raw[["Alien Species List Name (Scientific Name)"]] |>
+  clean_name() |>
+  tolower()
+missing_from_sheet <- setdiff(non_exact_names, sheet_names)
+if (length(missing_from_sheet) > 0) {
+  warning(length(missing_from_sheet),
+          " non-EXACT alien match(es) are not in the spreadsheet and will be dropped:\n  ",
+          paste(missing_from_sheet, collapse = "\n  "))
+} # All good!
+
+# Create the fully cleaned alien species list
+# EXACT (auto) + accepted manual (resolved), keeping only unique records per each species
+alien_cleaned <- bind_rows(alien_exact, alien_manual) |>
+  filter(!is.na(gbif_species), nzchar(gbif_species)) |>
   distinct(gbif_species, .keep_all = TRUE)
 
-cat("\nUsing", nrow(alien_cleaned), "alien species with exact GBIF matches.\n")
+# Get a quick summary of the cleaned records
+cat("\nAlien list assembled from spreadsheet:\n")
+cat("EXACT matches kept:", nrow(alien_exact), "\n") # 4722
+cat("Accepted manual resolved: ", nrow(alien_manual), "\n") # 41
+cat("Dropped (Accepted = No):", sum(tolower(trimws(alien_manual_raw[["Accepted?"]])) == "no"), "\n") # 13
+cat("Final distinct species:", nrow(alien_cleaned), "\n") # 4676
 
 # 3. PREPARE OCCURRENCE DATA ---------------------------------------------------
 
