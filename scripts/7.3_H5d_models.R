@@ -60,3 +60,140 @@ chao1_results <- chao1_data |>
                             n_species_obs + (f1 * (f1 - 1) / 2)),
             completeness_chao1 = n_species_obs / chao1,
             .groups = "drop")
+
+# Calculate ICE with time as the sampling unit
+ice_time_results <- time_data |>
+  group_by(poly_uid) |>
+  summarise(n_species_obs = n(),
+            Q1 = sum(n_years == 1),
+            Q2 = sum(n_years == 2),
+            .groups = "drop") |>
+  left_join(n_years_per_side, by = "poly_uid") |>
+  rename(n_years = total_years) |>
+  mutate(C_ice = 1 - (Q1 / n_years),
+         ice_time = if_else(Q2 > 0,
+                            {
+                              gamma_ice_val <- pmax(((n_species_obs / C_ice) * (Q1 / n_years) *
+                                                       ((n_years - 1) * Q1 / ((n_years - 1) * Q1 + 2 * Q2))) - 1, 0)
+                              n_species_obs + (Q1 / C_ice) * gamma_ice_val
+                            },
+                            n_species_obs + (Q1 * (Q1 - 1) / 2)),
+         completeness_ice_time = n_species_obs / ice_time,
+         sample_coverage_time  = C_ice)
+
+# 4. COMBINE COMPLETENESS ESTIMATES --------------------------------------------
+
+# Base per-side data (n_species / n_occurrences are ALIEN counts here)
+completeness_data <- model_data |>
+  select(poly_uid, id, pair_id, polygon_type, area_m2_numeric,
+         english_categories, kommune, land_cover_name, n_species, n_occurrences)
+
+# Join Chao1 and ICE-time estimates by poly_uid
+completeness_data <- completeness_data |>
+  left_join(chao1_results |> select(poly_uid, completeness_chao1,
+                                    n_occurrences_total, chao1),
+            by = "poly_uid") |>
+  left_join(ice_time_results |> select(poly_uid, completeness_ice_time,
+                                       n_years, ice_time, sample_coverage_time),
+            by = "poly_uid")
+
+# Create the variables needed for the models
+completeness_data <- completeness_data |>
+  mutate(polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
+         land_cover_name = factor(land_cover_name),
+         kommune_factor = factor(kommune),
+         pair_id_factor = factor(pair_id),
+         area_km2 = area_m2_numeric / 1e6,
+         log_area_km2 = log(area_km2))
+
+# 5. FILTER DATA FOR MODELLING -------------------------------------------------
+
+## 5.1. Check availability of alien data ---------------------------------------
+
+# Try stricter filtering first
+availability_alien_records <- completeness_data |>
+  summarise(sides_total = n(),
+            sides_with_records = sum(n_occurrences > 0, na.rm = TRUE),
+            sides_species_ge3 = sum(n_species >= 3,  na.rm = TRUE),
+            sides_species_ge5 = sum(n_species >= 5,  na.rm = TRUE),
+            sides_species_ge10 = sum(n_species >= 10, na.rm = TRUE),
+            sides_occ_ge10 = sum(n_occurrences >= 10, na.rm = TRUE),
+            sides_years_ge3 = sum(n_years >= 3, na.rm = TRUE))
+
+# Check the summary of the availability
+print(as.data.frame(availability_alien_records))
+# sides_total sides_with_records sides_species_ge3 sides_species_ge5 sides_species_ge10 sides_occ_ge10
+# 1      259762              11346              2562              1194                315            711
+# sides_years_ge3
+# 1            1089
+# Surprisingly this looks quite good! But if it were <~200, we would need to lower the min_species below to 3
+
+## 5.2. Apply thresholds -------------------------------------------------------
+
+# Minimum thresholds (start at the H4d values; lower min_species to 3 if the
+# availability report shows too few sides at >= 5)
+min_species     <- 5
+min_occurrences <- 10
+min_years       <- 3
+
+# Filtered dataset for the Chao1 model
+model_data_chao1 <- completeness_data |>
+  filter(n_species >= min_species,
+         n_occurrences >= min_occurrences,
+         !is.na(completeness_chao1), !is.infinite(completeness_chao1),
+         completeness_chao1 > 0, completeness_chao1 <= 1)
+
+# Filtered dataset for the ICE-time model
+model_data_ice_time <- completeness_data |>
+  filter(n_species >= min_species,
+         n_years >= min_years,
+         !is.na(completeness_ice_time), !is.infinite(completeness_ice_time),
+         completeness_ice_time > 0, completeness_ice_time <= 1)
+
+# Check how much data there is in each filtered df
+cat("\nData after filtering:\n")
+cat("  Chao1 model:   ", nrow(model_data_chao1),    "sides\n") # 550
+cat("  ICE-time model:", nrow(model_data_ice_time), "sides\n\n") # 518
+
+# Add warning if the alien data is too little to model properly
+if (nrow(model_data_chao1) < 100 ||
+    n_distinct(model_data_chao1$polygon_type) < 2) {
+  warning("Very few alien sides survive the Chao1 thresholds - lower min_species ",
+          "(most alien sides hold 1 species) or reconsider per-side completeness.")
+}
+if (nrow(model_data_ice_time) < 100 ||
+    n_distinct(model_data_ice_time$polygon_type) < 2) {
+  warning("Very few alien sides survive the ICE-time thresholds - lower ",
+          "min_species / min_years, or reconsider per-side completeness.")
+} # wohoooo! it looks like we can proceed!
+
+# Quick summary of the complete polygon-buffer pairs qualifying for Chao1
+cat("Qualifying sides by type (Chao1):\n")
+print(table(model_data_chao1$polygon_type))
+# Buffer Development 
+# 341         209 
+complete_pairs_chao1 <- model_data_chao1 |>
+  count(pair_id) |> filter(n == 2) |> nrow()
+cat("Complete PAIRS (both sides qualify), Chao1:", complete_pairs_chao1, "\n\n") #95
+
+# Quick summary of the complete polygon-buffer pairs qualifying for ICE
+cat("Qualifying sides by type (ICE-time):\n")
+print(table(model_data_ice_time$polygon_type))
+# Buffer Development 
+# 350         168 
+complete_pairs_ice <- model_data_ice_time |>
+  count(pair_id) |> filter(n == 2) |> nrow()
+cat("Complete PAIRS (both sides qualify), ICE-time:", complete_pairs_ice, "\n\n") # 81
+
+# Save the completeness data
+saveRDS(completeness_data,
+        here("data", "derived_data", "h5d_completeness_data.rds"))
+
+
+
+
+
+
+
+
+
