@@ -109,6 +109,9 @@ save(h5c_zinb_additive, file = here::here("data", "models", "h5c_zinb_additive.R
 
 # Compare the models
 AICtab(h5c_zinb_full, h5c_zinb_additive, base = TRUE)
+#                   AIC      dAIC     df
+# h5c_zinb_full      96837.9      0.0 22
+# h5c_zinb_additive 100257.5   3419.6 15
 
 # Use the model with the lower AIC
 best_model_h5c <- h5c_zinb_full
@@ -140,19 +143,26 @@ save(h5c_hurdle_additive,
 
 # Compare models
 AICtab(h5c_hurdle_full, h5c_hurdle_additive, base = TRUE)
+#                     AIC      dAIC     df
+# h5c_hurdle_full     113534.4      0.0 22
+# h5c_hurdle_additive 113595.5     61.1 15
 
 # Check convergence of the hurdle models
 if (h5c_hurdle_full$sdr$pdHess) {
   cat("\nH5c hurdle (full) converged successfully\n")
 } else {
   cat("\nWarning: H5c hurdle (full) may not have converged properly\n")
-}
+} # Converged successfully!
 
 ## 3.7. Compare all three model families ---------------------------------------
 
 # Extract AIC
 cat("\nNegative binomial vs zero-inflated vs hurdle (full versions):\n")
 AICtab(h5c_nbinom_full, h5c_zinb_full, h5c_hurdle_full, base = TRUE)
+#                 AIC      dAIC     df
+# h5c_zinb_full    96837.9      0.0 22
+# h5c_nbinom_full  97041.2    203.3 19
+# h5c_hurdle_full 113534.4  16696.4 22 - No surprises there!
 
 # Select best H5c model
 best_model_h5c <- h5c_zinb_full
@@ -208,6 +218,10 @@ random_effects_h5c <- VarCorr(best_model_h5c)
 
 # Display random effects
 print(random_effects_h5c)
+# Conditional model:
+# Groups                        Name        Std.Dev.
+# pair_id_factor:kommune_factor (Intercept) 5.308261
+# kommune_factor                (Intercept) 0.053154
 
 # 7. HYPOTHESIS TESTING --------------------------------------------------------
 
@@ -219,6 +233,9 @@ emmeans_polygon_h5c <- emmeans(best_model_h5c,
 # Check summary
 cat("Expected alien species richness by side (conditional component):\n")
 print(summary(emmeans_polygon_h5c))
+# polygon_type response       SE  df asymp.LCL asymp.UCL
+# Buffer       0.000558 4.01e-05 Inf  0.000485  0.000642
+# Development  0.000637 4.99e-05 Inf  0.000546  0.000743
 
 # Compare polygons and buffers
 contrast_polygon_h5c <- contrast(emmeans_polygon_h5c,
@@ -227,6 +244,8 @@ contrast_polygon_h5c <- contrast(emmeans_polygon_h5c,
 # Check comparison
 cat("\nDevelopment vs Buffer (alien richness rate ratio):\n")
 print(summary(contrast_polygon_h5c, infer = TRUE))
+# contrast             ratio     SE  df asymp.LCL asymp.UCL null z.ratio p.value
+# Development / Buffer  1.14 0.0654 Inf      1.02      1.28    1   2.305  0.0212
 
 # Hypothesis verdict from the rate-ratio CI
 con_df <- as.data.frame(confint(contrast_polygon_h5c))
@@ -237,13 +256,14 @@ rr_est <- con_df[[rr_col]]
 stopifnot(length(rr_est) == 1)
 cat(sprintf("\nAlien richness rate ratio (Development / Buffer): %.3f  [%.3f, %.3f]\n",
             rr_est, rr_lo, rr_hi))
+# Alien richness rate ratio (Development / Buffer): 1.141  [1.020, 1.277]
 if (rr_lo > 1) {
   cat("H5c SUPPORTED: development polygons hold higher alien richness (RR CI entirely > 1).\n")
 } else if (rr_hi < 1) {
   cat("H5c NOT supported: development polygons hold LOWER alien richness than buffers.\n")
 } else {
   cat("H5c inconclusive: the rate-ratio CI includes 1.\n")
-}
+} #H5c SUPPORTED: development polygons hold higher alien richness (RR CI entirely > 1)
 
 # Save the inference object
 saveRDS(list(richness_by_side = emmeans_polygon_h5c,
@@ -313,6 +333,16 @@ ggsave(filename = here("figures", "Figure_H5c_richness_by_side_and_landcover.pdf
 # Development/Buffer alien-richness rate ratio for all aliens, high-impact (SE+HI)
 # and lower-impact (PH/LO/NK/NR), each from a ZINB additive model (matching the
 # primary's family) so the three are comparable
+
+# Use a helper function to set up the modelling variables from a per-side dataset
+prep_richness <- function(side) {
+  side |>
+    mutate(polygon_type = factor(polygon_type, levels = c("Buffer", "Development")),
+           log_area_c = as.numeric(scale(log(area_m2_numeric), scale = FALSE)),
+           land_cover_name = factor(land_cover_name),
+           kommune_factor = factor(kommune),
+           pair_id_factor = factor(pair_id))
+}
 
 # Function to extract rate-ratio
 richness_rate_ratio <- function(model) {
