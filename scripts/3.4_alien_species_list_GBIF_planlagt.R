@@ -10,6 +10,7 @@
 
 # Source setup file
 library(here)
+library(patchwork)
 source(here("scripts", "0_setup.R"))
 
 # Load alien species list
@@ -166,11 +167,12 @@ cat("Final distinct species:", nrow(alien_cleaned), "\n") # 4676
 
 # 3. PREPARE OCCURRENCE DATA ---------------------------------------------------
 
-# Recreate polygon_tax_join from polygon_occurrence_join
-# (one row per occurrence, only within development polygons, no NAs)
-polygon_tax_join <- polygon_occurrence_join |>
-  st_drop_geometry() |>
-  filter(!is.na(gbifID))
+# Build polygon_tax_join from the 3.8 occurrence-level join
+# (one row per occurrence within development polygons, matched records only).
+# The join covers both sides, so keep Development only - the alien figures are
+# grouped by development category (english_categories).
+polygon_tax_join <- occurrence_join |>
+  filter(!is.na(gbifID), polygon_type == "Development")
 
 # 4. JOIN ALIEN LIST TO OCCURRENCE DATA ----------------------------------------
 
@@ -178,15 +180,19 @@ polygon_tax_join <- polygon_occurrence_join |>
 polygon_alien_join <- polygon_tax_join |>
   left_join(alien_cleaned |> select(gbif_species, risk_category),
             by = c("species" = "gbif_species")) |>
-  # Create simple alien/non-alien classification
+  # create simple alien/non-alien classification
   mutate(alien_status  = ifelse(is.na(risk_category), "Native", "Alien"),
          risk_category = ifelse(is.na(risk_category), "Native", risk_category))
 
 # Check counts
 cat("\nAlien status breakdown (SOR):\n")
 print(table(polygon_alien_join$alien_status))
+# Alien Native 
+# 15206 308280 
 cat("\nRisk category breakdown (SOR):\n")
 print(table(polygon_alien_join$risk_category))
+# HI     LO Native     NK     NR     PH     SE 
+# 1135   1619 308280    522   2798   1413   7719 
 
 # 5. CALCULATE PROPORTIONS -----------------------------------------------------
 
@@ -211,9 +217,9 @@ alien_risk_sor <- polygon_alien_join |>
 ## 5.2. Species-based proportions ----------------------------------------------
 
 # Get unique species per polygon, then join alien list
-species_per_polygon <- polygon_all_data |>
-  filter(n_species > 0) |>
-  select(polygon_id, english_categories, species_list) |>
+species_per_polygon <- model_data |>
+  filter(polygon_type == "Development", n_species > 0) |>
+  select(english_categories, species_list) |>
   tidyr::unnest(cols = species_list) |>
   rename(species = species_list) |>
   distinct(english_categories, species) |>
@@ -225,8 +231,12 @@ species_per_polygon <- polygon_all_data |>
 # Check counts
 cat("\nAlien status breakdown (species):\n")
 print(table(species_per_polygon$alien_status))
+# Alien Native 
+# 1892  26574 
 cat("\nRisk category breakdown (species):\n")
 print(table(species_per_polygon$risk_category))
+# HI     LO Native     NK     NR     PH     SE 
+# 221    364  26574     57    364    399    487 
 
 # Simple alien vs native proportions
 alien_simple_sp <- species_per_polygon |>
@@ -249,88 +259,80 @@ alien_risk_sp <- species_per_polygon |>
 ## 6.1. Simple alien vs native figures ----------------------------------------
 
 # Colour palette for simple classification
-simple_colours <- c("Alien"  = "#d62728",
-                    "Native" = "#2ca02c")
+simple_colours <- c("Alien"  = "#E69F00",
+                    "Native" = "#CC79A7")
 
 # Figure 6a: Alien vs native (SOR)
-fig6a <- ggplot(alien_simple_sor,
-                aes(x    = english_categories,
-                    y    = proportion,
+(fig6a <- ggplot(alien_simple_sor,
+                aes(x = english_categories,
+                    y = proportion,
                     fill = alien_status)) +
-  geom_bar(stat      = "identity",
-           position  = "stack",
-           color     = "white",
+  geom_bar(stat = "identity",
+           position = "stack",
+           color = "white",
            linewidth = 0.3) +
   scale_y_continuous(labels = scales::percent,
                      expand = expansion(mult = c(0, 0.02))) +
   scale_fill_manual(values = simple_colours,
                     name   = "Status") +
-  labs(x = "Development category",
-       y = "Proportion of occurrence records") +
+  labs(x = "Development Category",
+       y = "Proportion of Occurrence Records") +
   theme_classic() +
-  theme(panel.grid    = element_blank(),
-        axis.title    = element_text(size = 12),
-        axis.text     = element_text(size = 10),
-        axis.text.x   = element_text(angle = 45, hjust = 1),
-        legend.position = "none")
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none"))
 
 # Figure 6b: Alien vs native (species)
-fig6b <- ggplot(alien_simple_sp,
-                aes(x    = english_categories,
-                    y    = proportion,
+(fig6b <- ggplot(alien_simple_sp,
+                aes(x = english_categories,
+                    y = proportion,
                     fill = alien_status)) +
-  geom_bar(stat      = "identity",
-           position  = "stack",
-           color     = "white",
+  geom_bar(stat = "identity",
+           position = "stack",
+           color = "white",
            linewidth = 0.3) +
   scale_y_continuous(labels = scales::percent,
                      expand = expansion(mult = c(0, 0.02))) +
   scale_fill_manual(values = simple_colours,
-                    name   = "Status") +
-  labs(x = "Development category",
-       y = "Proportion of unique species") +
+                    name = "Status") +
+  labs(x = "Development Category",
+       y = "Proportion of Unique Species") +
   theme_classic() +
-  theme(panel.grid   = element_blank(),
-        axis.title   = element_text(size = 12),
-        axis.text    = element_text(size = 10),
-        axis.text.x  = element_text(angle = 45, hjust = 1),
-        legend.title = element_text(size = 11),
-        legend.text  = element_text(size = 10))
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 14)))
 
 # Combine panels
-figure6 <- plot_grid(fig6a, fig6b,
-                     labels = c("a)", "b)"),
-                     align  = "h",
-                     axis   = "tb")
+figure6 <- (fig6a + fig6b) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a", tag_suffix = ")")
 
 # Save figure
 ggsave(filename = here("figures", "Figure6_alien_vs_native_in_polygons.png"),
-       plot     = figure6,
-       width    = 12,
-       height   = 6,
-       dpi      = 600)
-
+       plot = figure6, width = 14, height = 8, dpi = 600)
 ggsave(filename = here("figures", "Figure6_alien_vs_native_in_polygons.pdf"),
-       plot     = figure6,
-       width    = 12,
-       height   = 6,
-       dpi      = 600)
+       plot = figure6, width = 12, height = 6, dpi = 600)
 
 ## 6.2. Risk category figures --------------------------------------------------
 
 # Define colour palette for risk categories
 # Order from highest to lowest risk
 risk_order  <- c("SE", "HI", "PH", "LO", "NK", "NR", "Native")
-risk_labels <- c("Severe impact (SE)", "High impact (HI)",
-                 "Potentially high impact (PH)", "Low impact (LO)",
-                 "No known impact (NK)", "Not assessed (NR)", "Native")
-risk_colours <- c("SE"     = "#7f0000",
-                  "HI"     = "#d62728",
-                  "PH"     = "#ff7f0e",
-                  "LO"     = "#ffbb78",
-                  "NK"     = "#bcbd22",
-                  "NR"     = "#969696",
-                  "Native" = "#2ca02c")
+risk_labels <- c("Severe Impact (SE)", "High Impact (HI)",
+                 "Potentially High Impact (PH)", "Low Impact (LO)",
+                 "No Known Impact (NK)", "Not Assessed (NR)", "Native")
+risk_colours <- c("SE" = "#E69F00",
+                  "HI" = "#56B4E9",
+                  "PH" = "#009E73",
+                  "LO" = "#F0E442",
+                  "NK" = "#0072B2",
+                  "NR" = "#CC79A7",
+                  "Native" = "#000000")
 
 # Set factor order
 alien_risk_sor$risk_category <- factor(alien_risk_sor$risk_category,
@@ -344,79 +346,78 @@ alien_risk_sor <- alien_risk_sor |>
 alien_risk_sp <- alien_risk_sp |>
   filter(risk_category != "Native")
 
+# Create y-axis to share for both panels and that clearly shows the max value
+tot <- function(df) df |>
+  group_by(english_categories) |>
+  summarise(total = sum(proportion), .groups = "drop") |>
+  pull(total)
+y_max <- max(c(tot(alien_risk_sor), tot(alien_risk_sp)))
+
+# Create tidy breaks up to y_max
+pretty_breaks <- scales::breaks_pretty()(c(0, y_max))
+pretty_breaks <- pretty_breaks[pretty_breaks < y_max * 0.85]
+y_breaks <- sort(unique(c(pretty_breaks, y_max)))
+
+# Get the shared y-axis
+shared_y <- list(scale_y_continuous(labels = scales::percent,
+                                    breaks = y_breaks,
+                                    expand = expansion(mult = c(0, 0.02))),
+                 coord_cartesian(ylim = c(0, y_max)))
+
 # Figure 7a: Risk categories (SOR)
-fig7a <- ggplot(alien_risk_sor,
-                aes(x    = english_categories,
-                    y    = proportion,
+(fig7a <- ggplot(alien_risk_sor,
+                aes(x = english_categories,
+                    y = proportion,
                     fill = risk_category)) +
-  geom_bar(stat      = "identity",
-           position  = "stack",
-           color     = "white",
+  geom_bar(stat = "identity",
+           position = "stack",
+           color = "white",
            linewidth = 0.3) +
-  scale_y_continuous(labels = scales::percent,
-                     expand = expansion(mult = c(0, 0.02))) +
+  shared_y +
   scale_fill_manual(values = risk_colours,
                     labels = risk_labels,
-                    name   = "Alien species risk") +
-  labs(x = "Development category",
-       y = "Proportion of occurrence records") +
+                    name = "Alien Species Risk") +
+  labs(x = "Development Category",
+       y = "Proportion of Occurrence Records") +
   theme_classic() +
-  theme(panel.grid      = element_blank(),
-        axis.title      = element_text(size = 12),
-        axis.text       = element_text(size = 10),
-        axis.text.x     = element_text(angle = 45, hjust = 1),
-        legend.position = "none")
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none"))
 
 # Figure 7b: Risk categories (species)
-fig7b <- ggplot(alien_risk_sp,
-                aes(x    = english_categories,
-                    y    = proportion,
+(fig7b <- ggplot(alien_risk_sp,
+                aes(x = english_categories,
+                    y = proportion,
                     fill = risk_category)) +
-  geom_bar(stat      = "identity",
-           position  = "stack",
-           color     = "white",
+  geom_bar(stat = "identity",
+           position = "stack",
+           color = "white",
            linewidth = 0.3) +
-  scale_y_continuous(labels = scales::percent,
-                     expand = expansion(mult = c(0, 0.02))) +
+  shared_y +
   scale_fill_manual(values = risk_colours,
                     labels = risk_labels,
-                    name   = "Alien species risk") +
-  labs(x = "Development category",
-       y = "Proportion of unique species") +
+                    name   = "Alien Species Risk") +
+  labs(x = "Development Category",
+       y = "Proportion of Unique Species") +
   theme_classic() +
-  theme(panel.grid   = element_blank(),
-        axis.title   = element_text(size = 12),
-        axis.text    = element_text(size = 10),
-        axis.text.x  = element_text(angle = 45, hjust = 1),
-        legend.title = element_text(size = 11),
-        legend.text  = element_text(size = 10))
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 14)))
 
-# Extract legend from the right panel
-legend <- get_legend(fig7b)
-
-# Remove legend from right panel
-fig7b_no_legend <- fig7b + theme(legend.position = "none")
-
-# Combine plots with aligned sizes
-plots <- plot_grid(fig7a, fig7b_no_legend,
-                   labels = c("a)", "b)"),
-                   align = "h",
-                   axis = "tb")
-
-# Add legend to the right
-figure7 <- plot_grid(plots, legend, rel_widths = c(3, 0.4))
+# Combine panels into a single figure
+figure7 <- (fig7a + fig7b) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a", tag_suffix = ")")
 
 # Save figure
 ggsave(filename = here("figures", "Figure7_alien_risk_categories_in_polygons.png"),
-       plot     = figure7,
-       width    = 12,
-       height   = 6,
-       dpi      = 600)
-
+       plot = figure7, width = 14, height = 8, dpi = 600)
 ggsave(filename = here("figures", "Figure7_alien_risk_categories_in_polygons.pdf"),
-       plot     = figure7,
-       width    = 12,
-       height   = 6,
-       dpi      = 600)
+       plot = figure7, width = 14, height = 8, dpi = 600)
 
 # END OF SCRIPT ----------------------------------------------------------------
