@@ -36,7 +36,8 @@ alien_clean <- alien_list_raw |>
   # Remove any duplicate species entries keeping first occurrence
   distinct(scientific_name, .keep_all = TRUE)
 
-cat("Alien species (mainland Norway):", nrow(alien_clean), "\n")
+# Quick summary
+cat("Alien species (mainland Norway):", nrow(alien_clean), "\n") # 4776
 cat("Risk category breakdown:\n")
 print(table(alien_clean$risk_category))
 # HI   LO   NK   NR   PH   SE 
@@ -164,6 +165,10 @@ cat("EXACT matches kept:", nrow(alien_exact), "\n") # 4722
 cat("Accepted manual resolved: ", nrow(alien_manual), "\n") # 41
 cat("Dropped (Accepted = No):", sum(tolower(trimws(alien_manual_raw[["Accepted?"]])) == "no"), "\n") # 13
 cat("Final distinct species:", nrow(alien_cleaned), "\n") # 4676
+
+# Save the resolved alien list to use when we want to test H5
+saveRDS(alien_cleaned,
+        here("data", "derived_data", "alien_species_list_resolved.rds"))
 
 # 3. PREPARE OCCURRENCE DATA ---------------------------------------------------
 
