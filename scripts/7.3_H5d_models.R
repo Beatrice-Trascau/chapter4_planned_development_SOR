@@ -189,11 +189,169 @@ cat("Complete PAIRS (both sides qualify), ICE-time:", complete_pairs_ice, "\n\n"
 saveRDS(completeness_data,
         here("data", "derived_data", "h5d_completeness_data.rds"))
 
+# 6. FIT MODELS ----------------------------------------------------------------
 
+## 6.1. Chao1 additive ---------------------------------------------------------
 
+# Fit ordered beta to deal with the 0s and 1s
+h5d_chao1_model1_additive <- glmmTMB(completeness_chao1 ~ polygon_type + log_area_km2 +
+                                       land_cover_name + log(n_occurrences_total) +
+                                       (1 | kommune_factor/pair_id_factor),
+                                     data = model_data_chao1,
+                                     family = ordbeta(link = "logit"))
+# Save model output
+save(h5d_chao1_model1_additive,
+     file = here::here("data", "models", "h5d_chao1_model1_additive.RData"))
 
+## 6.2. Chao1 interaction ------------------------------------------------------
 
+# Set up model
+h5d_chao1_model2_interaction <- glmmTMB(completeness_chao1 ~ polygon_type * log_area_km2 +
+                                          land_cover_name * log(n_occurrences_total) +
+                                          (1 | kommune_factor/pair_id_factor),
+                                        data   = model_data_chao1,
+                                        family = ordbeta(link = "logit"))
 
+# Save model output
+save(h5d_chao1_model2_interaction,
+     file = here::here("data", "models", "h5d_chao1_model2_interaction.RData"))
 
+## 6.3. Chao1 additive with dispersion model -----------------------------------
+
+# Set up model
+h5d_chao1_model3_disp <- glmmTMB(completeness_chao1 ~ polygon_type + log_area_km2 +
+                                   land_cover_name + log(n_occurrences_total) +
+                                   (1 | kommune_factor/pair_id_factor),
+                                 dispformula = ~ log(n_occurrences_total),
+                                 data   = model_data_chao1,
+                                 family = ordbeta(link = "logit"))
+
+# Save model output
+save(h5d_chao1_model3_disp,
+     file = here::here("data", "models", "h5d_chao1_model3_disp.RData"))
+
+# Compare models
+AICtab(h5d_chao1_model1_additive, h5d_chao1_model2_interaction,
+       h5d_chao1_model3_disp, base = TRUE)
+#                              AIC    dAIC   df
+# h5d_chao1_model1_additive    -138.1    0.0 15
+# h5d_chao1_model3_disp        -136.3    1.8 16
+# h5d_chao1_model2_interaction -130.5    7.6 22
+
+# Choose the better model
+chao1_final <- h5d_chao1_model1_additive
+chao1_final_data <- model_data_chao1
+
+## 6.4. Chao1 strict-threshold sensitivity check ---------------------------
+
+# Use a stricter threshold for the number of species and occurrences
+min_species_strict <- 10
+min_occurrences_strict <- 30
+
+# Filter the data
+model_data_chao1_strict <- completeness_data |>
+  filter(n_species >= min_species_strict,
+         n_occurrences >= min_occurrences_strict,
+         !is.na(completeness_chao1), !is.infinite(completeness_chao1),
+         completeness_chao1 > 0, completeness_chao1 <= 1)
+
+# Keep only the strict pairs
+strict_pairs <- model_data_chao1_strict |>
+  count(pair_id) |> filter(n == 2) |> nrow()
+cat("\nChao1 strict-threshold sides:", nrow(model_data_chao1_strict),
+    "| complete pairs:", strict_pairs, "\n")
+#Chao1 strict-threshold sides: 83 | complete pairs: 15 
+print(table(model_data_chao1_strict$polygon_type))
+# Buffer Development 
+# 46          37 
+
+# Only fit the strict nonlinear model if there is genuinely enough strict data
+strict_ok <- nrow(model_data_chao1_strict) >= 300 &&
+  strict_pairs >= 50 &&
+  n_distinct(model_data_chao1_strict$polygon_type) == 2
+
+if (strict_ok) {
+  h5d_chao1_model4_disp_poly <- glmmTMB(completeness_chao1 ~ polygon_type + log_area_km2 +
+                                          land_cover_name + poly(log(n_occurrences_total), 2) +
+                                          (1 | kommune_factor/pair_id_factor),
+                                        dispformula = ~ log(n_occurrences_total),
+                                        data   = model_data_chao1_strict,
+                                        family = ordbeta(link = "logit"))
+  save(h5d_chao1_model4_disp_poly,
+       file = here::here("data", "models", "h5d_chao1_model4_disp_poly.RData"))
+  cat("Strict nonlinear model fitted as a sensitivity check.\n")
+} else {
+  cat("Strict thresholds leave too little alien data - model4_disp_poly skipped.\n")
+} # Strict thresholds leave too little alien data - model4_disp_poly skipped
+
+## 6.5. ICE-time additive ------------------------------------------------------
+
+# Set up model
+h5d_ice_time_model1 <- glmmTMB(completeness_ice_time ~ polygon_type + log_area_km2 +
+                                 land_cover_name + log(n_years) +
+                                 (1 | kommune_factor/pair_id_factor),
+                               data = model_data_ice_time,
+                               family = ordbeta(link = "logit"))
+
+# Save model output
+save(h5d_ice_time_model1,
+     file = here::here("data", "models", "h5d_ice_time_model1.RData"))
+
+## 6.6. ICE-time interaction ---------------------------------------------------
+
+# Set up model
+h5d_ice_time_model2 <- glmmTMB(completeness_ice_time ~ polygon_type * log_area_km2 *
+                                 land_cover_name + log(n_years) +
+                                 (1 | kommune_factor/pair_id_factor),
+                               data = model_data_ice_time,
+                               family = ordbeta(link = "logit"))
+
+# Issue with convergence!
+
+# Save model output
+save(h5d_ice_time_model2,
+     file = here::here("data", "models", "h5d_ice_time_model2.RData"))
+
+# Compare models
+AICtab(h5d_ice_time_model1, h5d_ice_time_model2, base = TRUE)
+# AIC   dAIC  df
+# h5d_ice_time_model1 409.9   0.0 15
+# h5d_ice_time_model2 435.1  25.2 33
+
+## 6.7. Random-effect check ----------------------------------------------------
+
+# With few complete pairs the nested pair-level variance can collapse toward zero , which would make it unidentifiable 
+# Check if this is the case and automatically refit the model with a kommune-only random effect 
+pair_var_near_zero <- function(model, tol = 1e-4) {
+  vc <- VarCorr(model)$cond
+  nm <- grep("pair_id_factor", names(vc), value = TRUE)
+  if (length(nm) == 0) return(FALSE)
+  as.numeric(attr(vc[[nm[1]]], "stddev")[1]) < tol
+}
+
+# Check if any of the estimators need to be refitted
+cat("\nPair-level RE near zero?  Chao1 headline:", pair_var_near_zero(chao1_final),
+    "| ICE-time:", pair_var_near_zero(h5d_ice_time_model1), "\n")
+# Pair-level RE near zero?  Chao1 headline: FALSE | ICE-time: FALSE
+
+# Chao1 check & refit if needed
+if (pair_var_near_zero(chao1_final)) {
+  cat("  -> refitting Chao1 headline with kommune-only RE\n")
+  chao1_final <- glmmTMB(completeness_chao1 ~ polygon_type + log_area_km2 +
+                           land_cover_name + log(n_occurrences_total) +
+                           (1 | kommune_factor),
+                         data = chao1_final_data,
+                         family = ordbeta(link = "logit"))
+}
+
+# ICE-time check & refit if needed
+if (pair_var_near_zero(h5d_ice_time_model1)) {
+  cat("  -> refitting ICE-time with kommune-only RE\n")
+  h5d_ice_time_model1 <- glmmTMB(completeness_ice_time ~ polygon_type + log_area_km2 +
+                                   land_cover_name + log(n_years) +
+                                   (1 | kommune_factor),
+                                 data = model_data_ice_time,
+                                 family = ordbeta(link = "logit"))
+}
 
 
