@@ -196,14 +196,15 @@ availability_redlist_records <- completeness_data |>
             sides_species_ge10 = sum(n_species >= 10, na.rm = TRUE),
             sides_occ_ge10 = sum(n_occurrences >= 10, na.rm = TRUE),
             sides_occ_ge30 = sum(n_occurrences >= 30, na.rm = TRUE),
-            sides_years_ge3 = sum(n_years >= 3, na.rm = TRUE))
+            sides_years_ge3 = sum(n_years >= 3, na.rm = TRUE),
+            sides_events_ge3 = sum(n_events >= 3, na.rm = TRUE))
 
 # Look at the summary
 print(as.data.frame(availability_redlist_records))
-# sides_total sides_with_records sides_species_ge3 sides_species_ge5 sides_species_ge10
-#      259762              10187              2989              1583                551
-# sides_occ_ge10 sides_occ_ge30 sides_years_ge3
-#           1284            483            2110
+# sides_total sides_with_records sides_species_ge3 sides_species_ge5 sides_species_ge10 sides_occ_ge10 sides_occ_ge30
+# 1      259762              10187              2989              1583                551           1284            483
+# sides_years_ge3 sides_events_ge3
+# 1            2110               26
 
 ## 5.2. Apply thresholds -------------------------------------------------------
 
@@ -227,10 +228,35 @@ model_data_ice_time <- completeness_data |>
          !is.na(completeness_ice_time), !is.infinite(completeness_ice_time),
          completeness_ice_time > 0, completeness_ice_time <= 1)
 
+# Create filtered datasets for ICE events model
+model_data_ice_event <- completeness_data |>
+  filter(n_species >= min_species,
+         n_events >= min_events,
+         !is.na(completeness_ice_event), !is.infinite(completeness_ice_event),
+         completeness_ice_event > 0, completeness_ice_event <= 1)
+
+# Filtered dataset for Chao2 with time
+model_data_chao2_time <- completeness_data |>
+  filter(n_species >= min_species,
+         n_years >= min_years,
+         !is.na(completeness_chao2_time), !is.infinite(completeness_chao2_time),
+         completeness_chao2_time > 0, completeness_chao2_time <= 1)
+
+# Filtered dataset for Chao2 with events
+model_data_chao2_event <- completeness_data |>
+  filter(n_species >= min_species,
+         n_events >= min_events,
+         !is.na(completeness_chao2_event), !is.infinite(completeness_chao2_event),
+         completeness_chao2_event > 0, completeness_chao2_event <= 1)
+
 # Check how much data is left after filtering
 cat("\nData after filtering:\n")
-cat("Chao1 model:", nrow(model_data_chao1), "sides\n") # 1125 sides
-cat("ICE-time model:", nrow(model_data_ice_time), "sides\n\n") # 1189 sides
+cat("  Chao1 model:", nrow(model_data_chao1),"sides\n") # 1225
+cat("  ICE-time model:", nrow(model_data_ice_time), "sides\n") # 1189
+cat("  Chao2-time model:", nrow(model_data_chao2_time), "sides\n") # 1310
+cat("  Chao2-event model:", nrow(model_data_chao2_event), "sides\n") # 21 
+cat("  ICE-event model:", nrow(model_data_ice_event), "sides\n\n") # 20
+# With 20 sides for the events estimators, there is absolutely no way we can model these. Dropping the events models!
 
 # Add warning if the data is too little to model sensibly
 if (nrow(model_data_chao1) < 100 ||
@@ -403,7 +429,42 @@ AICtab(h4d_ice_time_model1, h4d_ice_time_model2, base = TRUE)
 # h4d_ice_time_model1 587.8   0.0 15
 # h4d_ice_time_model2 612.1  24.3 34
 
-## 6.7. Random-effect check ----------------------------------------------------
+## 6.7. Chao2 time additive model ----------------------------------------------
+
+# Set model
+h4d_chao2_time_model1 <- glmmTMB(completeness_chao2_time ~ polygon_type + log_area_km2 +
+                                   land_cover_name + log(n_years) +
+                                   (1 | kommune_factor/pair_id_factor),
+                                 data = model_data_chao2_time,
+                                 family = ordbeta(link = "logit"))
+
+# Save model output
+save(h4d_chao2_time_model1,
+     file = here::here("data", "models", "h4d_chao2_time_model1.RData"))
+
+## 6.8. Chao2 time interactive model -------------------------------------------
+
+# Set model to run
+h4d_chao2_time_model2 <- glmmTMB(completeness_chao2_time ~ polygon_type * log_area_km2 +
+                                   land_cover_name * log(n_years) +
+                                   (1 | kommune_factor/pair_id_factor),
+                                 data = model_data_chao2_time,
+                                 family = ordbeta(link = "logit"))
+
+# Save model output
+save(h4d_chao2_time_model2,
+     file = here::here("data", "models", "h4d_chao2_time_model2.RData"))
+
+# Compare models
+AICtab(h4d_chao2_time_model1, h4d_chao2_time_model2, base = TRUE)
+#                       AIC    dAIC   df
+# h4d_chao2_time_model1 -561.4    0.0 15
+# h4d_chao2_time_model2 -557.8    3.6 22
+
+# Check convergence
+cat("  Chao2-time:", h4d_chao2_time_model1$sdr$pdHess, "\n") # TRUE
+
+## 6.9. Random-effect check ----------------------------------------------------
 
 # After fitering, we are left with very few pairs have both sides (i.e both polygons and buffers) with enough data to use
 # Use a helper to flag that pair variance has collapse towards zero, which would mean that it is not supported by the data
@@ -489,6 +550,32 @@ write.csv(coef_table_h4d_ice,
           here("figures", "Table_H4d_ICE_additive_coefficients.csv"),
           row.names = FALSE)
 
+## 7.3. Chao2 time model -------------------------------------------------------
+
+# Print model summary
+print(summary(h4d_chao2_time_model1))
+
+# Check convergence
+if (h4d_chao2_time_model1$sdr$pdHess) {
+  cat("\nChao2-time model converged successfully\n")
+} else {
+  cat("\nWarning: nChao2-time model may not have converged\n")
+} # Whohooo converged successfully!!
+
+# Create coefficient table
+coef_table_h4d_chao2 <- broom.mixed::tidy(h4d_chao2_time_model1,
+                                        effects = "fixed", conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 4),
+         SE = round(std.error, 4),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 4))) |>
+  select(Term = term, Estimate, SE, `z value`, `p value`)
+
+# Save coefficient table
+write.csv(coef_table_h4d_chao2,
+          here("figures", "Table_H4d_Chao2_additive_coefficients.csv"),
+          row.names = FALSE)
+
 # 8. MODEL DIAGNOSTICS ---------------------------------------------------------
 
 ## 8.1. Chao1 additive model ---------------------------------------------------
@@ -525,6 +612,23 @@ print(testDispersion(sim_residuals_h4d_ice))
 
 # Test for outliers
 print(testOutliers(sim_residuals_h4d_ice))
+
+## 8.3. Chao2 time additive model ----------------------------------------------
+
+# Simulate residuals
+sim_residuals_h4d_chao2 <- simulateResiduals(fittedModel = h4d_chao2_time_model1,
+                                             n = 1000)
+# Create diagnostic plots
+png(filename = here("figures", "Figure_H4d_Chao2_additive_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_h4d_chao2)
+dev.off()
+
+# Test for dispersion
+print(testDispersion(sim_residuals_h4d_chao2))
+
+# Test for outliers
+print(testOutliers(sim_residuals_h4d_chao2))
 
 # 9. MODEL PREDICTION FIGURE ---------------------------------------------------
 
@@ -597,6 +701,20 @@ ggsave(filename = here("figures", "Figure_H4d_ICE_predictions.png"),
 ggsave(filename = here("figures", "Figure_H4d_ICE_predictions.pdf"),
        plot = fig_ice_predictions, width = 14, height = 10, dpi = 600)
 
+## 9.3. Chao2 time additive ----------------------------------------------------
+
+# Get predictions for area x polygon type x land-cover
+pred_df_chao2 <- make_pred_df(h4d_chao2_time_model1, model_data_chao2_time)
+
+# Create the main plot
+fig_chao2_predictions <- completeness_figure(pred_df_chao2)
+
+# Save plot to file
+ggsave(filename = here("figures", "Figure_H4d_chao2_predictions.png"),
+       plot = fig_chao2_predictions, width = 14, height = 10, dpi = 600)
+ggsave(filename = here("figures", "Figure_H4d_chao2_predictions.pdf"),
+       plot = fig_chao2_predictions, width = 14, height = 10, dpi = 600)
+
 # 10. HYPOTHESIS TESTING -------------------------------------------------------
 
 ## 10.1. Chao1 model -----------------------------------------------------------
@@ -667,3 +785,41 @@ saveRDS(list(chao1_by_side = emmeans_polygon_h4d_chao1,
              ice_by_side = emmeans_polygon_h4d_ice,
              ice_contrast = contrast_polygon_h4d_ice),
         here("data", "models", "h4d_completeness_emmeans.rds"))
+
+## 10.3. Robustness check across all estimators --------------------------------
+
+# Pull the polygon vs buffer completeness odds ration from every fitted estimator into one table so we can check
+# if the direction and significance (or lack thereof) hold across the estimators
+completeness_contrast <- function(model, label) {
+  emm <- emmeans(model, specs = "polygon_type", type = "response")
+  d <- as.data.frame(confint(contrast(emm, method = "revpairwise",
+                                        type = "response")))
+  or_col <- grep("ratio|estimate", names(d), value = TRUE)[1]
+  or <- d[[or_col]]
+  lo <- d[[grep("LCL|lower", names(d), value = TRUE)[1]]]
+  hi <- d[[grep("UCL|upper", names(d), value = TRUE)[1]]]
+  data.frame(estimator = label,
+             OR = round(or, 3), lower = round(lo, 3), upper = round(hi, 3),
+             verdict = if (lo > 1) "higher in polygons"
+             else if (hi < 1) "lower in polygons"
+             else "inconclusive")
+}
+
+# Combine the estimator comparisons
+completeness_comparison <- bind_rows(completeness_contrast(chao1_final, "Chao1 (abundance)"),
+                                     completeness_contrast(h4d_chao2_time_model1,  "Chao2-time"),
+                                     completeness_contrast(h4d_ice_time_model1,    "ICE-time"))
+
+# Print the comparisons
+print(completeness_comparison)
+# estimator    OR lower upper      verdict
+# 1 Chao1 (abundance) 1.023 0.926 1.131 inconclusive
+# 2        Chao2-time 0.970 0.888 1.061 inconclusive
+# 3          ICE-time 0.997 0.880 1.130 inconclusive
+
+# Save comparison
+write.csv(completeness_comparison,
+          here("figures", "Table_H4d_completeness_estimator_comparison.csv"),
+          row.names = FALSE)
+
+# END OF SCRIPT ----------------------------------------------------------------
