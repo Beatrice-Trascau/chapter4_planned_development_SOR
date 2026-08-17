@@ -404,3 +404,230 @@ print(VarCorr(best_presence))
 
 ## 9.1. H5a - is the polygon share of alien SOR above 0.5? ---------------------
 
+# Get the average share over land cover; estimate is area-adjusted share
+# a value of 0.5 = no difference in density
+emm_overall <- emmeans(best_split, ~ 1, offset = 0, type = "response")
+
+# Get a summary
+print(summary(emm_overall))
+
+# Convert to df
+emm_df <- as.data.frame(emm_overall)
+
+# Get estimate and confidence interaval and covert it to scales that can be used in the manuscript
+pi_hat <- emm_df$prob
+ci_lo  <- emm_df[[grep("LCL|lower", names(emm_df), value = TRUE)[1]]]
+ci_hi  <- emm_df[[grep("UCL|upper", names(emm_df), value = TRUE)[1]]]
+cat(sprintf("\nPolygon share: %.3f  [%.3f, %.3f]\n", pi_hat, ci_lo, ci_hi)) # 0.333  [0.312, 0.353]
+if (ci_lo > 0.5) {
+  cat("H5a SUPPORTED: the polygon share CI lies entirely above 0.5.\n")
+} else if (ci_hi < 0.5) {
+  cat("H5a NOT supported: the share lies below 0.5 (buffers hold more).\n")
+} else {
+  cat("H5a inconclusive: the CI for the polygon share includes 0.5.\n")
+} # H5a NOT supported: the share lies below 0.5 (buffers hold more)
+
+## 9.2. H5b - does the sahre of alien SOR increase with area? ------------------
+
+# Get the average area slope of the share, across land-cover
+slope_overall <- emtrends(best_split, ~ 1, var = "log_area_c")
+
+# Print summary of the slope
+print(summary(slope_overall))
+
+# Extract slope confidence intervals 
+slope_df <- as.data.frame(slope_overall)
+tcol <- grep("trend", names(slope_df), value = TRUE)[1]
+slo_lo <- slope_df[[grep("LCL|lower", names(slope_df), value = TRUE)[1]]]
+slo_hi <- slope_df[[grep("UCL|upper", names(slope_df), value = TRUE)[1]]]
+cat(sprintf("\nArea slope: %.3f  [%.3f, %.3f]\n", slope_df[[tcol]], slo_lo, slo_hi)) # -0.108  [-0.133, -0.082]
+if (slo_lo > 0) {
+  cat("H5b SUPPORTED: the share increases with area (slope CI entirely > 0).\n")
+} else if (slo_hi < 0) {
+  cat("H5b NOT supported: the share DECREASES with area (buffer pulls ahead).\n")
+} else {
+  cat("H5b inconclusive: the area slope CI includes 0.\n")
+} # H5b NOT supported: the share DECREASES with area (buffer pulls ahead)
+
+# Area slope + share by land-cover
+slope_landcover <- emtrends(best_split, ~ land_cover_name, var = "log_area_c")
+
+# Save slopes to file
+write.csv(as.data.frame(slope_landcover),
+          here("figures", "Table_H5b_area_slope_by_landcover.csv"), row.names = FALSE)
+emm_landcover <- emmeans(best_split, ~ land_cover_name, offset = 0, type = "response")
+landcover_df <- as.data.frame(emm_landcover)
+write.csv(landcover_df,
+          here("figures", "Table_H5a_share_by_landcover.csv"), row.names = FALSE)
+
+# LRT for the area x land cover interaction
+lrt_split <- anova(h5ab_betabin_additive, h5ab_betabin_full)
+print(lrt_split)
+
+# Save outputs
+saveRDS(list(h5a_overall_share = emm_overall, h5a_share_by_lc = emm_landcover,
+             h5b_area_slope = slope_overall, h5b_slope_by_lc = slope_landcover,
+             lrt_interaction = lrt_split),
+        here("data", "models", "h5ab_betabin_inference.rds"))
+
+## 9.3. H5 presebce - are polygons less likely to be empty of alien SOR? -------
+
+# Get the probability of presence for polygons and buffers averaged over area and land-cover
+cat("\nH5 presence: development polygons vs buffers holding any alien record.\n\n")
+emm_presence <- emmeans(best_presence, ~ polygon_type, type = "response")
+print(summary(emm_presence))
+
+# Compare development polygons vs buffers as an odds ratio
+contrast_presence <- contrast(emm_presence, method = "revpairwise", type = "response")
+print(summary(contrast_presence, infer = TRUE))
+
+# Get the odds-ratio CI
+con_df <- as.data.frame(confint(contrast_presence))
+or_col <- grep("ratio|estimate", names(con_df), value = TRUE)[1]
+or_lo <- con_df[[grep("LCL|lower", names(con_df), value = TRUE)[1]]]
+or_hi <- con_df[[grep("UCL|upper", names(con_df), value = TRUE)[1]]]
+cat(sprintf("\nOdds ratio (Development / Buffer): %.3f  [%.3f, %.3f]\n",
+            con_df[[or_col]], or_lo, or_hi))
+if (or_lo > 1) {
+  cat("H5 presence SUPPORTED: development polygons more likely to hold alien records.\n")
+} else if (or_hi < 1) {
+  cat("H5 presence NOT supported: development polygons MORE likely to be empty.\n")
+} else {
+  cat("H5 presence inconclusive: the odds-ratio CI includes 1.\n")
+} # H5 presence NOT supported: development polygons MORE likely to be empty.
+
+# Save output
+saveRDS(list(presence_by_side = emm_presence, dev_vs_buffer = contrast_presence),
+        here("data", "models", "h5_presence_inference.rds"))
+
+# 10. ALL ALIENS MODELS PREDICTION FIGURES -------------------------------------
+
+# Define a function to display land-cover names neatly
+pretty_lc <- function(x) {
+  x <- gsub("_", " ", x)
+  gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
+}
+
+## 10.1 Predicted share of Alien SOR by area and land-cover --------------------
+
+# Predict values
+predictions_split <- ggpredict(best_split,
+                               terms = c("log_area_c [all]", "land_cover_name"),
+                               condition = c(area_offset = 0))
+
+# Convert to df
+pred_df_split <- as.data.frame(predictions_split) |>
+  rename(log_area_c = x, land_cover_name = group)
+
+# Add pair records
+lc_ranges_split <- pair_records |>
+  group_by(land_cover_name) |>
+  summarise(lo = min(log_area_c), hi = max(log_area_c), .groups = "drop")
+pred_df_split <- pred_df_split |>
+  left_join(lc_ranges_split, by = "land_cover_name") |>
+  filter(log_area_c >= lo, log_area_c <= hi) |>
+  select(-lo, -hi)
+
+# Plot prediction
+(fig_split_predictions <- ggplot(pred_df_split, aes(x = log_area_c, y = predicted)) +
+    geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey40", linewidth = 0.5) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "#E66101", alpha = 0.2) +
+    geom_line(colour = "#E66101", linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_y_continuous(labels = scales::percent) +
+    labs(x = expression(paste("Log(Polygon Area (m"^2, "))")),
+         y = "Predicted Share of Alien SOR Within the Development Polygons") +
+    theme_classic() +
+    theme(panel.grid = element_blank(), axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold")))
+
+# Save figure to file
+ggsave(here("figures", "Figure_H5ab_predicted_share_by_landcover.png"),
+       fig_split_predictions, width = 14, height = 10, dpi = 600)
+ggsave(here("figures", "Figure_H5ab_predicted_share_by_landcover.pdf"),
+       fig_split_predictions, width = 14, height = 10, dpi = 600)
+
+## 10.2. Presence probability by side and land-cover ---------------------------
+
+# Get per-side presence probability for development vs buffer within land-cover
+predictions_presence <- ggpredict(best_presence,
+                                  terms = c("log_area_c [n=100]", "polygon_type",
+                                            "land_cover_name"))
+
+# Get df
+pred_df_presence <- as.data.frame(predictions_presence) |>
+  rename(log_area_c = x, polygon_type = group, land_cover_name = facet)
+lc_ranges_presence <- presence_data |>
+  group_by(land_cover_name, polygon_type) |>
+  summarise(lo = min(log_area_c), hi = max(log_area_c), .groups = "drop")
+pred_df_presence <- pred_df_presence |>
+  left_join(lc_ranges_presence, by = c("land_cover_name", "polygon_type")) |>
+  filter(log_area_c >= lo, log_area_c <= hi) |>
+  select(-lo, -hi)
+
+# Set colours
+polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
+
+# Plot figure
+(fig_presence_predictions <- ggplot(pred_df_presence,
+                                    aes(x = log_area_c, y = predicted,
+                                        colour = polygon_type, fill = polygon_type)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+    geom_line(linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_colour_manual(values = polygon_colours, name = "Area type") +
+    scale_fill_manual(values = polygon_colours, name = "Area type") +
+    scale_y_continuous(labels = scales::percent) +
+    labs(x = expression(paste("Log(Area (m"^2, "))")),
+         y = "Probability of Side Containing Any Alien SOR") +
+    theme_classic() +
+    theme(panel.grid = element_blank(), axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold"),
+          legend.position = "right"))
+
+# Save figure
+ggsave(here("figures", "Figure_H5_presence_by_side_and_landcover.png"),
+       fig_presence_predictions, width = 14, height = 10, dpi = 600)
+ggsave(here("figures", "Figure_H5_presence_by_side_and_landcover.pdf"),
+       fig_presence_predictions, width = 14, height = 10, dpi = 600)
+
+# 11. HIGH-IMPACT (SE+HI) vs LOWER-IMPACT (PH/LO/NK/NR) ------------------------
+
+# All aliens (from the primary models) + the two impact groups, same additive
+# split model + full presence model, side by side
+cat("\n=== H5ab impact split ===\n")
+impact_comparison <- bind_rows(
+  row_from_models("All aliens", best_split, best_presence, pair_records, presence_data),
+  run_group_compact("High impact (SE+HI)",        high_impact_categories),
+  run_group_compact("Lower impact (PH/LO/NK/NR)", lower_impact_categories)
+)
+
+# Check the comparisons
+print(impact_comparison)
+
+# Save the comparison
+write.csv(impact_comparison,
+          here("figures", "Table_H5ab_impact_split_comparison.csv"), row.names = FALSE)
+
+# 12. BREAKDOWN BY RISK CATEGORY -----------------------------------------------
+
+# Look at each risk category on its own 
+# Rare risk categories (often SE) may be too sparse to fit -
+# these come back as NA rows with a printed note rather than stopping the script
+cat("\n=== H5ab per-tier breakdown ===\n")
+tier_comparison <- bind_rows(lapply(alien_tiers, function(tc) run_group_compact(tc, tc)))
+
+# Quick look at the comparison
+print(tier_comparison)
+
+# Save the by-risk category comparison
+write.csv(tier_comparison,
+          here("figures", "Table_H5ab_risk_tier_comparison.csv"), row.names = FALSE)
+
+# END OF SCRIPT ----------------------------------------------------------------
