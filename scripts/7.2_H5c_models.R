@@ -79,6 +79,9 @@ save(h5c_nbinom_additive,
 
 # Compare models
 AICtab(h5c_nbinom_full, h5c_nbinom_additive, base = TRUE)
+#                     AIC     dAIC    df
+# h5c_nbinom_full     97041.2     0.0 19
+# h5c_nbinom_additive 97214.2   173.0 12
 
 ## 3.3. H5c Zero-inflated, interaction -----------------------------------------
 
@@ -153,3 +156,223 @@ AICtab(h5c_nbinom_full, h5c_zinb_full, h5c_hurdle_full, base = TRUE)
 
 # Select best H5c model
 best_model_h5c <- h5c_zinb_full
+
+# 4. MODEL SUMMARY -------------------------------------------------------------
+
+# Get a summary of the model
+print(summary(best_model_h5c))
+
+# Check convergence
+if (best_model_h5c$sdr$pdHess) {
+  cat("\nH5c model converged successfully\n")
+} else {
+  cat("\nWarning: H5c model may not have converged properly\n")
+}
+
+# Create a tidy summary table 
+coef_table_h5c <- broom.mixed::tidy(best_model_h5c,
+                                    effects  = "fixed",
+                                    conf.int = TRUE) |>
+  mutate(Estimate = round(estimate, 4),
+         SE = round(std.error, 4),
+         `z value` = round(statistic, 2),
+         `p value` = ifelse(p.value < 0.001, "<0.001", round(p.value, 4))) |>
+  select(Component = component, Term = term, Estimate, SE, `z value`, `p value`)
+
+# Save the tidy summary table
+write.csv(coef_table_h5c,
+          here("figures", "Table_H5c_richness_model_coefficients.csv"),
+          row.names = FALSE)
+
+# 5. MODEL DIAGNOSTICS ---------------------------------------------------------
+
+# Simulate residuals
+sim_residuals_h5c <- simulateResiduals(fittedModel = best_model_h5c, n = 1000)
+
+# Plot diagnostic plot
+png(filename = here("figures", "Figure_H5c_richness_diagnostics.png"),
+    width = 12, height = 8, units = "in", res = 300)
+plot(sim_residuals_h5c)
+dev.off()
+
+# Test dispersion
+print(testDispersion(sim_residuals_h5c))
+
+# Test outliers
+print(testOutliers(sim_residuals_h5c))
+
+# 6. RANDOM EFFECTS ------------------------------------------------------------
+
+# Extract random effects
+random_effects_h5c <- VarCorr(best_model_h5c)
+
+# Display random effects
+print(random_effects_h5c)
+
+# 7. HYPOTHESIS TESTING --------------------------------------------------------
+
+# Expected richness per side, averaged over area and land cover
+emmeans_polygon_h5c <- emmeans(best_model_h5c,
+                               specs = "polygon_type",
+                               type = "response")
+
+# Check summary
+cat("Expected alien species richness by side (conditional component):\n")
+print(summary(emmeans_polygon_h5c))
+
+# Compare polygons and buffers
+contrast_polygon_h5c <- contrast(emmeans_polygon_h5c,
+                                 method = "revpairwise", type = "response")
+
+# Check comparison
+cat("\nDevelopment vs Buffer (alien richness rate ratio):\n")
+print(summary(contrast_polygon_h5c, infer = TRUE))
+
+# Hypothesis verdict from the rate-ratio CI
+con_df <- as.data.frame(confint(contrast_polygon_h5c))
+rr_col <- grep("ratio|estimate", names(con_df), value = TRUE)[1]
+rr_lo  <- con_df[[grep("LCL|lower", names(con_df), value = TRUE)[1]]]
+rr_hi  <- con_df[[grep("UCL|upper", names(con_df), value = TRUE)[1]]]
+rr_est <- con_df[[rr_col]]
+stopifnot(length(rr_est) == 1)
+cat(sprintf("\nAlien richness rate ratio (Development / Buffer): %.3f  [%.3f, %.3f]\n",
+            rr_est, rr_lo, rr_hi))
+if (rr_lo > 1) {
+  cat("H5c SUPPORTED: development polygons hold higher alien richness (RR CI entirely > 1).\n")
+} else if (rr_hi < 1) {
+  cat("H5c NOT supported: development polygons hold LOWER alien richness than buffers.\n")
+} else {
+  cat("H5c inconclusive: the rate-ratio CI includes 1.\n")
+}
+
+# Save the inference object
+saveRDS(list(richness_by_side = emmeans_polygon_h5c,
+             dev_vs_buffer = contrast_polygon_h5c),
+        here("data", "models", "h5c_richness_inference.rds"))
+
+# 8. PREDICTION FIGURE ---------------------------------------------------------
+
+# Use a function to display the land-cover names neatly
+pretty_lc <- function(x) {
+  x <- gsub("_", " ", x)
+  gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
+}
+
+# Define colour pallette
+polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
+
+# Function to predict richness across area, each land-cover over its own observed log-area range
+predict_within_lc_range <- function(model, data, n = 100) {
+  lcs <- levels(droplevels(factor(data$land_cover_name)))
+  preds <- lapply(lcs, function(lc) {
+    rng      <- range(data$log_area_c[data$land_cover_name == lc], na.rm = TRUE)
+    seq_vals <- round(seq(rng[1], rng[2], length.out = n), 5)
+    term_str <- paste0("log_area_c [", paste(seq_vals, collapse = ","), "]")
+    ggpredict(model,
+              terms = c(term_str, "polygon_type"),
+              condition = c(land_cover_name = lc),
+              type = "fixed") |>
+      as.data.frame() |>
+      rename(log_area_c = x, polygon_type = group) |>
+      mutate(land_cover_name = lc)
+  })
+  bind_rows(preds)
+}
+
+# Use the function defined above
+pred_df_h5c <- predict_within_lc_range(best_model_h5c, richness_data)
+
+# Plot predictions
+(fig_h5c_predictions <- ggplot(pred_df_h5c,
+                               aes(x = log_area_c, y = predicted,
+                                   colour = polygon_type, fill = polygon_type)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+    geom_line(linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_colour_manual(values = polygon_colours, name = "Area Type") +
+    scale_fill_manual(values = polygon_colours, name = "Area Type") +
+    labs(x = expression(paste("Log(Area (m"^2, "))")),
+         y = "Predicted Alien Species Richness") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold"),
+          legend.position = "right"))
+
+# Save the figures
+ggsave(filename = here("figures", "Figure_H5c_richness_by_side_and_landcover.png"),
+       plot = fig_h5c_predictions, width = 14, height = 10, dpi = 600)
+ggsave(filename = here("figures", "Figure_H5c_richness_by_side_and_landcover.pdf"),
+       plot = fig_h5c_predictions, width = 14, height = 10, dpi = 600)
+
+# 9. HIGH-IMPACT vs LOWER-IMPACT RICHNESS COMPARISON ---------------------------
+
+# Development/Buffer alien-richness rate ratio for all aliens, high-impact (SE+HI)
+# and lower-impact (PH/LO/NK/NR), each from a ZINB additive model (matching the
+# primary's family) so the three are comparable
+
+# Function to extract rate-ratio
+richness_rate_ratio <- function(model) {
+  emm <- emmeans(model, specs = "polygon_type", type = "response")
+  d   <- as.data.frame(confint(contrast(emm, method = "revpairwise",
+                                        type = "response")))
+  rr_col <- grep("ratio|estimate", names(d), value = TRUE)[1]
+  c(RR = d[[rr_col]],
+    lower = d[[grep("LCL|lower", names(d), value = TRUE)[1]]],
+    upper = d[[grep("UCL|upper", names(d), value = TRUE)[1]]])
+}
+
+# Fit a ZINB additive richness model for one group and return a comparison row
+run_richness_group <- function(label, side, min_present = 30) {
+  rd <- prep_richness(side)
+  n_present <- sum(rd$n_species > 0)
+  mean_dev <- mean(rd$n_species[rd$polygon_type == "Development"])
+  mean_buf <- mean(rd$n_species[rd$polygon_type == "Buffer"])
+  
+  # add to a df
+  na_row <- data.frame(group = label, present_sides = n_present,
+                       mean_rich_dev = round(mean_dev, 4),
+                       mean_rich_buf = round(mean_buf, 4),
+                       RR = NA, RR_lo = NA, RR_hi = NA, note = "sparse / failed")
+  
+  # check if the data is too sparse
+  if (n_present < min_present) {
+    cat("  ", label, "- too sparse (present sides", n_present, ") - skipped\n")
+    return(na_row)
+  }
+  tryCatch({
+    m <- glmmTMB(n_species ~ polygon_type + log_area_c + land_cover_name +
+                   (1 | kommune_factor/pair_id_factor),
+                 data      = rd,
+                 family    = nbinom2,
+                 ziformula = ~ polygon_type + log_area_c)
+    rr <- richness_rate_ratio(m)
+    data.frame(group = label, present_sides = n_present,
+               mean_rich_dev = round(mean_dev, 4),
+               mean_rich_buf = round(mean_buf, 4),
+               RR = round(rr["RR"], 3),
+               RR_lo = round(rr["lower"], 3), RR_hi = round(rr["upper"], 3),
+               note = "")
+  }, error = function(e) {
+    cat("  ", label, "- model fit failed:", conditionMessage(e), "\n")
+    na_row
+  })
+}
+
+# Check the comparison by risk level
+impact_richness_comparison <- bind_rows(run_richness_group("All aliens", model_data),
+                                        run_richness_group("High impact (SE+HI)", model_data_high),
+                                        run_richness_group("Lower impact (PH/LO/NK/NR)", model_data_lower))
+
+# Check the comparison
+print(impact_richness_comparison)
+
+# Save the comparison to file
+write.csv(impact_richness_comparison,
+          here("figures", "Table_H5c_impact_richness_comparison.csv"),
+          row.names = FALSE)
+
+# END OF SCRIPT ----------------------------------------------------------------
