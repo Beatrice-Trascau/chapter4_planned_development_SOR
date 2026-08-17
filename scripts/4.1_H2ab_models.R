@@ -104,7 +104,7 @@ cat("\nPairs entering the split model (H2a / H2b):", nrow(pair_records), "\n") #
 h2ab_betabin_full <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
                                log_area_c * land_cover_name +
                                offset(area_offset) + (1 | kommune_factor),
-                             data   = pair_records,
+                             data = pair_records,
                              family = betabinomial)
 
 # Save model output
