@@ -3,7 +3,7 @@
 # 4.1_H2c_models
 # This script contains code to test Hypothesis 2c: Area plan polygons will have
 # higher species richness than areas outside of the planned developments and
-# H2d: Completenss of species records will be greater in the devekopment
+# H2d: Completenss of species records will be greater in the development
 # polygons than outside
 ##----------------------------------------------------------------------------##
 
