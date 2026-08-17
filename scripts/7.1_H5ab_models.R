@@ -178,8 +178,86 @@ run_group_compact <- function(label, keep_categories, min_n = 30) {
 
 # 3. FLAG ALIEN OCCURRENCES AND BULD PER-SIDE DATASETS -------------------------
 
+# Keep only alien occurrences and attach the risk category
+occ_alien <- occ_join |>
+  filter(!is.na(gbifID)) |>
+  mutate(species = clean_name(species)) |>
+  inner_join(alien_cleaned, by = c("species" = "gbif_species"))
 
+# Get a summary
+cat("\nAlien occurrence records:", nrow(occ_alien),
+    "of", sum(!is.na(occ_join$gbifID)), "matched records\n") # 40670 of 682121 matched records
+cat("Alien occurrences by risk category:\n")
+print(table(occ_alien$risk_category))
+# HI    LO    NK    NR    PH    SE 
+# 2482  3703  1156  8183  3577 21569 
 
+# Save the alien occurrence-level join (with risk_category)
+saveRDS(occ_alien,
+        here("data", "derived_data", "h5_polygon_buffer_occurrence_join.rds"))
+
+# Build the primary per-side data (i.e. any alien category)
+all_alien_categories <- alien_tiers
+model_data_alien <- build_side_data(occ_alien, model_data, all_alien_categories)
+saveRDS(model_data_alien,
+        here("data", "derived_data", "h5_polygon_buffer_data.rds"))
+
+# Save the impact-split per-side datasets to reuse
+saveRDS(build_side_data(occ_alien, model_data, high_impact_categories),
+        here("data", "derived_data", "h5_highimpact_polygon_buffer_data.rds"))
+saveRDS(build_side_data(occ_alien, model_data, lower_impact_categories),
+        here("data", "derived_data", "h5_lowerimpact_polygon_buffer_data.rds"))
+
+# Check that the primary dataset is built correctly
+stopifnot(nrow(model_data_alien) == nrow(model_data),
+          anyDuplicated(model_data_alien$poly_uid) == 0,
+          !any(is.na(model_data_alien$n_occurrences)))
+cat("\nAll-alien sides with >=1 record:", sum(model_data_alien$n_occurrences > 0),
+    "(", round(100 * mean(model_data_alien$n_occurrences > 0), 1), "%)\n") # 11346 ( 4.4 %)
+
+# 4. PREPARE ALL ALIENS DATA ---------------------------------------------------
+
+# Use the functions defined above
+pair_data <- make_pair_data(model_data_alien)
+presence_data <- make_presence_data(model_data_alien)
+
+# Check how many pairs we have to use
+stopifnot(nrow(pair_data) == n_distinct(model_data_alien$pair_id),
+          !any(is.na(pair_data$sor_polygon)),
+          all(is.finite(pair_data$area_offset)))
+cat("\nPairs:", nrow(pair_data),
+    "| with any alien records:", sum(pair_data$any_records),
+    "(", round(100 * mean(pair_data$any_records), 1), "%)\n")
+# Pairs: 129881 | with any alien records: 9230 ( 7.1 %)
+
+# Remove pairs that do not have any occurrences
+pair_records <- pair_data |>
+  filter(sor_total > 0) |>
+  droplevels()
+
+# Quick summary
+cat("Pairs entering the split model (H5a / H5b):", nrow(pair_records), "\n")
+# Pairs entering the split model (H5a / H5b): 9230
+cat("Record-bearing pairs by land cover:\n")
+print(table(pair_records$land_cover_name))
+# Cropland             Forest          Grassland          Heathland        Settlements 
+# 1203               5340                220                584               1593 
+# Sparsely_vegetated           Wetlands 
+# 168                122 
+
+# 5. FIT ALL ALIEN MODELS ------------------------------------------------------
+
+## 5.1. H5ab split model with full interaction ---------------------------------
+
+# Set up the model
+h5ab_betabin_full <- glmmTMB(cbind(sor_polygon, sor_buffer) ~
+                               log_area_c * land_cover_name +
+                               offset(area_offset) + (1 | kommune_factor),
+                             data = pair_records, family = betabinomial)
+
+# Save the model output
+save(h5ab_betabin_full,
+     file = here::here("data", "models", "h5ab_betabin_full.RData"))
 
 
 
