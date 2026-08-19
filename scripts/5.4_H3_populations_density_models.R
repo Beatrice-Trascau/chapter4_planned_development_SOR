@@ -387,22 +387,23 @@ predict_by_pop_lc <- function(model, data, n = 100) {
 }
 
 # Convert to df
-pred_df <- predict_by_pop_lc(h3pop_zinb_interaction, model_data)
+pred_df <- predict_by_pop_lc(h3pop_nb_interaction, model_data)
 
 # Plot figure
 (fig_predictions <- ggplot(pred_df, aes(x = log1p_pop_density, y = predicted)) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "#5E3C99", alpha = 0.2) +
-  geom_line(colour = "#5E3C99", linewidth = 1) +
-  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
-             labeller = as_labeller(pretty_lc)) +
-  labs(x = "log(1 + population density) (people/km2)",
-       y = expression(atop("Predicted conditional record density",
-                           "(records per km"^2*", where records occur)"))) +
-  theme_classic() +
-  theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14), axis.text = element_text(size = 12),
-        strip.background = element_rect(fill = "grey90", colour = "black"),
-        strip.text = element_text(size = 12, face = "bold")))
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "#5E3C99", alpha = 0.2) +
+    geom_line(colour = "#5E3C99", linewidth = 1) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    labs(x = expression(atop("log(1 + Population Density)",
+                             "(Population/km"^2*")")),
+         y = expression(atop("Predicted SOR Density",
+                             "(SOR/km"^2*")")))+
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 14), axis.text = element_text(size = 12),
+          strip.background = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 12, face = "bold")))
 
 # Save figure
 ggsave(here("figures", "Figure_H3pop_density_predictions_by_landcover.png"),
