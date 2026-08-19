@@ -1,6 +1,6 @@
 ##----------------------------------------------------------------------------##
 # PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
-# 5.1_H3_GLMM
+# 5.2_H3_GLMM
 # This script contains code to test Hypothesis 3: Urban and near-urban polygons
 # will have more SOR than other planned development types
 ##----------------------------------------------------------------------------##
