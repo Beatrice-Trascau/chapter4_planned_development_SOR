@@ -84,12 +84,37 @@ population_by_poly <- inter |>
 cat("Polygons with a population value:", nrow(population_by_poly),
     "of", nrow(development_poly), "\n") # 65476 of 129881
 
+# 4. COMBINE AND SAVE ----------------------------------------------------------
 
+# Create one row per development polygon
+dev_ids <- development_poly |> st_drop_geometry() |> dplyr::select(id)
 
+# Fix polygons with NA
+pop_lookup <- dev_ids |>
+  left_join(population_by_poly, by = "id") |>
+  # polygons that do not intesect with any populated grid cell come back as NA from the join
+  # SSB omits cells with zero resides (or 1-3 for privacy reasons)
+  # so NA  = 0 population
+  mutate(pop_density_raw = pop_density,
+         pop_density = ifelse(is.na(pop_density), 0, pop_density),
+         log1p_pop_density = log1p(pop_density))
 
+# Check how many polygons have 0 population
+cat("Polygons coded pop_density = 0 (no populated / suppressed cell):",
+    sum(is.na(pop_lookup$pop_density_raw)), "of", nrow(pop_lookup), "\n") # 64406 of 129881
 
+# Check the data was added correctly
+cat("\nPolygons still missing pop_density (should be 0):",
+    sum(is.na(pop_lookup$pop_density)), "\n") # 0
+cat("pop_density summary (people/km2, 0 = unpopulated/suppressed):\n")
+print(summary(pop_lookup$pop_density))
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 0.0     0.0    16.0   227.0   206.2 11280.0 
+cat("Share of polygons with zero population:",
+    round(mean(pop_lookup$pop_density == 0), 3), "\n") # 0.496
 
+# Save the object to file
+saveRDS(pop_lookup,
+        here("data", "derived_data", "development_population_density.rds"))
 
-
-
-
+# END OF SCRIPT ----------------------------------------------------------------
