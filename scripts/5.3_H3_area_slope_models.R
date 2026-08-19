@@ -1,6 +1,6 @@
 ##----------------------------------------------------------------------------##
 # PAPER 4: PLANNED DEVELOPMENT AREA AND SPECIES OCCURRENCE RECORDS
-# 5.2_H3_area_slope_models
+# 5.3_H3_area_slope_models
 # This script contains code to test Hypothesis 3 in a different way: look at
 # occurrence density scales with polygon area depending on land cover
 ##----------------------------------------------------------------------------##
