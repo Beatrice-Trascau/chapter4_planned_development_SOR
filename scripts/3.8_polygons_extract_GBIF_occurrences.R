@@ -21,6 +21,7 @@ polygon_buffer_data <- readRDS(here("data", "derived_data",
 clean_occurrences <- read.csv(here("data", "derived_data",
                                    "clean_occurrences_1km.txt"))[,
                                                                  c("gbifID", "species", "year", "parentEventID",
+                                                                   "kingdom", "phylum", "class",
                                                                    "decimalLongitude", "decimalLatitude")]
 
 # 2. CHECK INPUT  --------------------------------------------------------------
@@ -240,5 +241,281 @@ saveRDS(polygon_buffer_occurrence_join,
 stopifnot(file.exists(here("data", "derived_data", "h2_polygon_buffer_data.rds")),
           file.exists(here("data", "derived_data", "h2d_polygon_buffer_occurrence_join.rds")),
           nrow(readRDS(here("data", "derived_data", "h2_polygon_buffer_data.rds"))) == nrow(polygon_buffer_data))
+
+# 9. PLOT FIGURES --------------------------------------------------------------
+
+# Filter out buffers from the per-polygon data
+dev_data <- model_data |>
+  filter(polygon_type == "Development")
+
+# Filter out buffers from the occurrence-level development data
+dev_occurrences <- polygon_buffer_occurrence_join |>
+  filter(polygon_type == "Development")
+
+# Check if you need to add the kingdom, phylum and class columns
+if (!all(c("kingdom", "phylum", "class") %in% names(dev_occurrences))) {
+  message("kingdom/phylum/class missing - rejoining taxonomy by gbifID")
+  tax_lookup <- read.csv(here("data", "derived_data",
+                              "clean_occurrences_1km.txt"))[,
+                                                            c("gbifID", "kingdom", "phylum", "class")]
+  dev_occurrences <- dev_occurrences |>
+    left_join(tax_lookup, by = "gbifID")
+  rm(tax_lookup); gc()
+}
+stopifnot(all(c("kingdom", "phylum", "class") %in% names(dev_occurrences)))
+
+# Quick check of the summary
+cat("\nDevelopment polygons used for figures:", nrow(dev_data), "\n") # 129881
+cat("Development-polygon occurrence records used for Figure 4:",
+    nrow(dev_occurrences), "\n") # 323486
+
+## 9.1. Figure 1 - Number of SOR per polygon  ----------------------------------
+
+# Calculate histogram counts for non-zero values
+nonzero_hist <- hist(log10(dev_data$n_occurrences[dev_data$n_occurrences > 0]),
+                     breaks = 50, plot = FALSE)
+
+# Get maximum number of occurrences in non-zero polygons
+max_nonzero_count <- max(nonzero_hist$counts)
+
+# Calculate the number of 0s
+n_zeros <- sum(dev_data$n_occurrences == 0)
+
+# Scaling factor between the two y axes
+scale_factor <- n_zeros / max_nonzero_count
+
+# Figure 1a - Histogram
+(fig1a <- ggplot() +
+  # zero bar
+  geom_col(aes(x = 0, y = n_zeros),
+           fill = "#5E3C99", color = "white", width = 0.1) +
+  # non-zero histogram, counts scaled up to match primary y axis
+  geom_histogram(data = dev_data |> filter(n_occurrences > 0),
+                 aes(x = log10(n_occurrences), y = after_stat(count) * scale_factor),
+                 bins = 50, fill = "#5E3C99", color = "white") +
+  scale_y_continuous(name     = "Number of Polygons (zero SOR)",
+                     labels   = scales::comma,
+                     expand   = expansion(mult = c(0, 0.05)),
+                     sec.axis = sec_axis(~ . / scale_factor,
+                                         name   = "Number of Polygons (>0 SOR)",
+                                         labels = scales::comma)) +
+  scale_x_continuous(breaks = c(0, log10(c(2, 11, 101, 1001, 10001))),
+                     labels = c("0", "1", "10", "100", "1,000", "10,000")) +
+  labs(x = "Number of SOR") +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text  = element_text(size = 14)))
+
+# Figure 1b - Occurrence "Accummulation Curve"
+(fig1b <- ggplot(dev_data,
+                aes(x = n_occurrences + 1,
+                    y = area_m2_numeric)) +
+  geom_point(alpha = 0.3, size  = 0.8, color = "#5E3C99") +
+  geom_smooth(color     = "black", linewidth = 0.8, se = TRUE) +
+  scale_x_log10(labels = scales::comma,
+                breaks = c(1, 10, 100, 1000, 10000)) +
+  scale_y_log10(labels = scales::comma,
+                breaks = c(100, 1000, 10000, 100000, 1000000)) +
+  labs(x = "log(Number of SOR)",
+       y = expression(paste("log(Polygon Area(m"^2, "))"))) +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text  = element_text(size = 14)))
+
+# Combine the two plots into a single figure
+figure1 <- plot_grid(fig1a, fig1b, labels = c("a)", "b)"))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure1_SOR_per_polygon.png"),
+       plot = figure1,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure1_SOR_per_polygon.pdf"),
+       plot = figure1,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+## 9.2. Figure 2 - Number of Species per polygon -------------------------------
+
+# Recalculate zeros and scale factor for species
+n_zeros_sp <- sum(dev_data$n_species == 0)
+nonzero_hist_sp <- hist(log10(dev_data$n_species[dev_data$n_species > 0]),
+                        breaks = 50, plot = FALSE)
+max_nonzero_count_sp <- max(nonzero_hist_sp$counts)
+scale_factor_sp <- n_zeros_sp / max_nonzero_count_sp
+
+# Figure 2a - Histogram
+(fig2a <- ggplot() +
+  geom_col(aes(x = 0, y = n_zeros_sp),
+           fill = "#5E3C99", color = "white", width = 0.1) +
+  geom_histogram(data = dev_data |> filter(n_species > 0),
+                 aes(x = log10(n_species), y = after_stat(count) * scale_factor_sp),
+                 bins = 50, fill = "#5E3C99", color = "white") +
+  scale_y_continuous(name = "Number of Polygons (0 Species)",
+                     labels = scales::comma,
+                     expand = expansion(mult = c(0, 0)),
+                     limits = c(0, n_zeros * 1.05),
+                     sec.axis = sec_axis(~ . / scale_factor_sp,
+                                         name   = "Number of Polygons (>0 Species)",
+                                         labels = scales::comma)) +
+  scale_x_continuous(breaks = c(0, log10(c(2, 11, 101, 1001, 10001))),
+                     labels = c("0", "1", "10", "100", "1,000", "10,000")) +
+  labs(x = "Number of Species") +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14)))
+
+# Figure 2b - Species area curve
+(fig2b <- ggplot(dev_data,
+                aes(x = n_species + 1,
+                    y = area_m2_numeric)) +
+  geom_point(alpha = 0.3, size = 0.8, color = "#5E3C99") +
+  geom_smooth(color = "black", linewidth = 0.8, se = TRUE) +
+  scale_x_log10(labels = scales::comma,
+                breaks = c(1, 10, 100, 1000, 10000)) +
+  scale_y_log10(labels = scales::comma,
+                breaks = c(100, 1000, 10000, 100000, 1000000)) +
+  labs(x = "log(Number of Species)",
+       y = expression(paste("log(Polygon Area (m"^2, "))"))) +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14)))
+
+# Combine into single figure
+figure2 <- plot_grid(fig2a, fig2b, labels = c("a)", "b)"))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure2_species_per_polygon.png"),
+       plot = figure2,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure2_species_per_polygon.pdf"),
+       plot = figure2,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+## 9.3. Figure 4 - Taxonomic breakdown of SOR in polygons ----------------------
+
+# Classify occurrences into taxonomic groups
+polygon_tax_join <- dev_occurrences |>
+  mutate(taxonomic_group = case_when(kingdom == "Plantae" ~ "Plants",
+                                     class   == "Aves" ~ "Birds",
+                                     phylum  == "Arthropoda" ~ "Arthropods",
+                                     class   == "Mammalia" ~ "Mammals",
+                                     kingdom == "Fungi" ~ "Fungi",
+                                     TRUE  ~ "Other"))
+
+# Calculate proportion of each group per development category
+tax_proportions <- polygon_tax_join |>
+  group_by(english_categories, taxonomic_group) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(english_categories) |>
+  mutate(proportion = n / sum(n)) |>
+  ungroup()
+
+# Define colour palette for taxonomic groups
+tax_colours <- c("Plants" = "#009E73",
+                 "Birds" = "#0072B2",
+                 "Arthropods" = "#E69F00",
+                 "Mammals" = "#D55E00",
+                 "Fungi" = "#CC79A7",
+                 "Other" = "#F0E442")
+
+# Plot stacked barplot of proportion of occurrences belongoing to each group
+# within the planned development polygons
+(figure4 <- ggplot(tax_proportions, aes(x = english_categories, y = proportion,
+                                       fill = taxonomic_group)) +
+  geom_bar(stat = "identity", position = "stack", color = "white", linewidth = 0.3) +
+  scale_y_continuous(labels = scales::percent,
+                     expand = expansion(mult = c(0, 0.02))) +
+  scale_fill_manual(values = tax_colours,
+                    name   = "Taxonomic Group") +
+  labs(x = "Development Category",
+       y = "Proportion of SOR") +
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 13)))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure4_taxonomic_breakdown_per_development_type.png"),
+       plot = figure4,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure4_taxonomic_breakdown_per_development_type.pdf"),
+       plot = figure4,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+## 9.4. Figure 5 - Number of SOR vs Number of Species per Polygon -------------
+
+# Plot figure
+(figure8 <- ggplot(dev_data,
+                  aes(x = n_species + 1,
+                      y = n_occurrences + 1)) +
+  # 1:1 reference line (n_occurrences == n_species)
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "grey50", linewidth = 0.6) +
+  geom_point(alpha = 0.3, size = 0.8, color = "#5E3C99") +
+  geom_smooth(color = "black", linewidth = 0.8, se = TRUE) +
+  scale_x_log10(labels = scales::comma,
+                breaks = c(1, 10, 100, 1000, 10000)) +
+  scale_y_log10(labels = scales::comma,
+                breaks = c(1, 10, 100, 1000, 10000)) +
+  labs(x = "log(Number of Species)",
+       y = "log(Number of SOR)")+
+  theme_classic() +
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14)))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure8_SOR_vs_species_per_polygon.png"),
+       plot = figure8,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure8_SOR_vs_species_per_polygon.pdf"),
+       plot = figure8,
+       width = 20,
+       height = 16,
+       dpi = 600)
+
+# 10. FIGURE 3 - MUNICIPALITY MAP OF % SOR IN DEVELOPMENT POLYGONS -------------
+
+# Set projection
+project_crs <- 25833
+
+
+
+
+
+
+
+
+
+
+
 
 # END OF SCRIPT ----------------------------------------------------------------
