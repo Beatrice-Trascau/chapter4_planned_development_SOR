@@ -507,15 +507,135 @@ ggsave(filename = here("figures", "Figure8_SOR_vs_species_per_polygon.pdf"),
 # Set projection
 project_crs <- 25833
 
+# Use occurrences_sf from section 3 (or reload it if it was deleted)
+if (!exists("occurrences_sf")) {
+  message("occurrences_sf not found - rebuilding from clean_occurrences_1km.txt")
+  occurrences_sf <- read.csv(here("data", "derived_data",
+                                  "clean_occurrences_1km.txt"))[,
+                                                                c("gbifID", "decimalLongitude", "decimalLatitude")] |>
+    filter(!is.na(decimalLongitude), !is.na(decimalLatitude)) |>
+    st_as_sf(coords = c("decimalLongitude", "decimalLatitude"), crs = 4326) |>
+    st_transform(project_crs)
+}
+
+## 10.1. Prepare municipality boundaries ---------------------------------------
+
+# Load municiaplity boundaries downloaded from GeoNorge
+norway_municipalities_sf <- st_read(here("data", "raw_data",
+                                         "Basisdata_0000_Norge_25833_Kommune_GeoJSON.geojson"))
+
+# Match CRS of occurrence point exactly
+norway_municipalities_sf <- st_transform(norway_municipalities_sf,
+                                         st_crs(occurrences_sf))
+
+# Download Norway land boundary and clip municipalities to it - removes marine
+# areas that extend offshore for some coastal municipalities
+norway_land <- geodata::gadm(country = "NOR", level = 0,
+                             path = tempdir(), version = "latest") |>
+  st_as_sf() |>
+  st_transform(st_crs(occurrences_sf))
+
+# Clip municipality boundaries to land
+norway_municipalities_sf <- st_intersection(norway_municipalities_sf, norway_land)
+
+## 10.2. Total SOR per municipality --------------------------------------------
+
+# Confirm CRS is the same before joining
+stopifnot(st_crs(occurrences_sf) == st_crs(norway_municipalities_sf))
+
+# Join occurrences to municipality boundaries (drop occurrences that are outside any municipality)
+# only keep the columns you need to make the processing faster
+occurrence_municipality_join <- st_join(occurrences_sf |> dplyr::select(gbifID),
+                                        norway_municipalities_sf |> dplyr::select(kommunenummer),
+                                        join = st_intersects,
+                                        left = FALSE)
+
+# Count total occurrences per municipality
+total_sor_per_municipality <- occurrence_municipality_join |>
+  st_drop_geometry() |>
+  group_by(kommunenummer) |>
+  summarise(total_sor = n(), .groups = "drop")
+
+# Sum occurrences within development polygons per municipality
+# use the per-polygon counts already computed in model data
+stopifnot("kommunenummer" %in% names(model_data))
+polygon_sor_per_municipality <- model_data |>
+  filter(polygon_type == "Development") |>
+  group_by(kommunenummer) |>
+  summarise(polygon_sor = sum(n_occurrences), .groups = "drop")
+
+# Join total SOR and polygon SOR by kommunenummer
+municipality_pct <- total_sor_per_municipality |>
+  left_join(polygon_sor_per_municipality, by = "kommunenummer") |>
+  # replace NA polygon SOR with 0 (municipalities with no development polygons)
+  mutate(polygon_sor     = ifelse(is.na(polygon_sor), 0, polygon_sor),
+         pct_in_polygons = (polygon_sor / total_sor) * 100)
+
+# Quick check
+cat("Municipalities with total SOR data:", nrow(municipality_pct), "\n") # 357
+cat("Municipalities with polygon SOR > 0:", sum(municipality_pct$polygon_sor > 0), "\n") # 238
+cat("Municipalities with zero total SOR:", sum(municipality_pct$total_sor == 0), "\n") # 0
+
+## 10.3. Plot municipality map -------------------------------------------------
+
+# Get the max value for % of SOR within polygons to use in the legend
+pct_max <- ceiling(max(municipality_pct$pct_in_polygons, na.rm = TRUE))
+
+# Join percentages to boundaries
+norway_map_data <- norway_municipalities_sf |>
+  left_join(municipality_pct, by = "kommunenummer")
+
+# Quick check of how much data we have
+cat("Municipalities with a percentage:", sum(!is.na(norway_map_data$pct_in_polygons)),
+    "| of which 0%:", sum(norway_map_data$pct_in_polygons == 0, na.rm = TRUE),
+    "| no data (grey):", sum(is.na(norway_map_data$pct_in_polygons)), "\n")
+# Municipalities with a percentage: 357 | of which 0%: 119 | no data (grey): 0 
+
+# Set legend breaks from 0% to the max
+grad_breaks <- round(seq(0, pct_max, length.out = 5))
 
 
+# Plot map
+(figure3 <- ggplot(norway_map_data) +
+    geom_sf(aes(fill = pct_in_polygons), color = "white", linewidth = 0.1) +
+    scale_fill_viridis_c(name = "% of SOR Within\nDevelopment Polygons",
+                         option = "viridis",
+                         na.value = "grey80",
+                         limits = c(0, pct_max),
+                         breaks = grad_breaks,
+                         labels = paste0(grad_breaks, "%"),
+                         guide = guide_colourbar(barheight = unit(4, "cm"),
+                                                 barwidth  = unit(0.8, "cm"))) +
+    annotation_north_arrow(location = "tl",
+                           which_north = "true",
+                           pad_x = unit(0.2, "cm"),
+                           pad_y = unit(0.2, "cm"),
+                           style = north_arrow_fancy_orienteering()) +
+    annotation_scale(location = "bl",
+                     width_hint = 0.25,
+                     pad_x = unit(0.5, "cm"),
+                     pad_y = unit(0.5, "cm")) +
+    theme_minimal() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_blank(),
+          axis.title = element_blank(),
+          legend.position = "right",
+          legend.title = element_text(size = 14),
+          legend.text  = element_text(size = 13)))
 
 
+# Save figure as .png
+ggsave(filename = here("figures", "Figure3_municipality_map_pct_SOR.png"),
+       plot = figure3,
+       width = 12,
+       height = 14,
+       dpi = 600)
 
-
-
-
-
-
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure3_municipality_map_pct_SOR.pdf"),
+       plot = figure3,
+       width = 12,
+       height = 14,
+       dpi = 600)
 
 # END OF SCRIPT ----------------------------------------------------------------
