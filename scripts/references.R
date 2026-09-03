@@ -1,8 +1,8 @@
 # Load here package
-library(segmented)
+library(DHARMa)
 
 # Get citation info
-cit <- citation("segmented")
+cit <- citation("DHARMa")
 
 # Extract authors
 authors <- paste(
@@ -19,7 +19,7 @@ year <- cit$year
 title <- cit$title
 
 # Extract version
-version <- as.character(packageVersion("segmented"))
+version <- as.character(packageVersion("DHARMa"))
 
 # Extract URL
 url <- cit$url
@@ -34,4 +34,4 @@ ris <- c("TY  - COMP",
          "ER  -")
 
 # Write .RIS reference to file
-writeLines(ris, here("references", "segmented.ris"))
+writeLines(ris, here("references", "DHARMa.ris"))
