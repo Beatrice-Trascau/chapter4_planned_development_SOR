@@ -249,13 +249,19 @@ print(testDispersion(sim_residuals_presence))
 random_effects_split <- VarCorr(best_split)
 cat("\n=== H2a/H2b random effects (kommune) ===\n")
 print(random_effects_split)
-re_var_split <- as.numeric(random_effects_split$cond$kommune_factor[1])
+# Groups         Name        Std.Dev.
+# kommune_factor (Intercept) 0.18197
+re_var_split <- as.numeric(attr(random_effects_split$cond$kommune_factor, "stddev"))^2
 cat("Random effect variance (kommune):", round(re_var_split, 4), "\n")
+#Random effect variance (kommune): 0.0331
 
 ## 6.2. H1 presence model ------------------------------------------------------
 random_effects_presence <- VarCorr(best_presence)
 cat("\n=== H1 random effects (kommune / pair) ===\n")
 print(random_effects_presence)
+# Groups                        Name        Std.Dev.
+# pair_id_factor:kommune_factor (Intercept) 1.76629 
+# kommune_factor                (Intercept) 0.90756 
 
 # 7. HYPOTHESIS TESTING --------------------------------------------------------
 
@@ -412,11 +418,34 @@ pretty_lc <- function(x) {
   gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
 }
 
+# Back transform the centred log-area axis to the actual area (m2) values
+# N.B: each model was centred on its own mean log-area
+mean_log_split    <- mean(log(pair_data$area_polygon)) # for 8.1 (split model)
+mean_log_presence <- mean(log(presence_data$area_m2_numeric)) # for 8.4 (presence model)
+
+# Use the min and max of the area for the plotting
+breaks_m2_split <- c(min(pair_records$area_polygon),
+                     1e3, 1e4, 1e5, 1e6,
+                     max(pair_records$area_polygon))
+breaks_m2_pres  <- c(min(presence_data$area_m2_numeric),
+                     1e3, 1e4, 1e5, 1e6,
+                     max(presence_data$area_m2_numeric))
+
+# Use hectares for x axis labels
+ha_label <- function(x_m2) {
+  v <- x_m2 / 1e4
+  vapply(v, function(a) {
+    if (a >= 1) formatC(a, format = "f", digits = 0, big.mark = ",")
+    else        formatC(signif(a, 2), format = "g")
+  }, character(1))
+}
+
+
 ## 8.1. H2ab - predicted share of SOR by area and land-cover -------------------
 
 # Predict values
 predictions_split <- ggpredict(best_split,
-                               terms     = c("log_area_c [all]", "land_cover_name"),
+                               terms = c("log_area_c [all]", "land_cover_name"),
                                condition = c(area_offset = 0))
 
 # Convert to df
@@ -433,24 +462,28 @@ pred_df_split <- pred_df_split |>
   filter(log_area_c >= lo, log_area_c <= hi) |>
   select(-lo, -hi)
 
+# Plot prediction
 (fig_split_predictions <- ggplot(pred_df_split,
-                                aes(x = log_area_c, y = predicted)) +
-  geom_hline(yintercept = 0.5, linetype = "dashed",
-             colour = "grey40", linewidth = 0.5) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
-              fill = "#E66101", alpha = 0.2) +
-  geom_line(colour = "#E66101", linewidth = 1.2) +
-  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
-             labeller = as_labeller(pretty_lc)) +
-  scale_y_continuous(labels = scales::percent) +
-  labs(x = expression(paste("log(Polygon Area (m"^2, "))")),
-       y = "Predicted share of SOR Within the Development Polygons") +
-  theme_classic() +
-  theme(panel.grid       = element_blank(),
-        axis.title       = element_text(size = 16),
-        axis.text        = element_text(size = 14),
-        strip.background  = element_rect(fill = "grey90", colour = "black"),
-        strip.text       = element_text(size = 14, face = "bold")))
+                                 aes(x = log_area_c, y = predicted)) +
+    geom_hline(yintercept = 0.5, linetype = "dashed",
+               colour = "grey40", linewidth = 0.5) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+                fill = "#E66101", alpha = 0.2) +
+    geom_line(colour = "#E66101", linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_y_continuous(labels = scales::percent) +
+    # polygon area on the x-axis in hectares (log-spaced); min & max marked
+    scale_x_continuous(breaks = log(breaks_m2_split) - mean_log_split,
+                       labels = ha_label(breaks_m2_split)) +
+    labs(x = "Polygon Area (ha)",
+         y = "Predicted share of SOR Within the Development Polygons") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background  = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold")))
 
 # Save figure to file
 ggsave(filename = here("figures", "Figure_H2ab_predicted_share_by_landcover.png"),
@@ -468,21 +501,21 @@ landcover_plot_df <- landcover_df |>
 
 # Plot figure
 (fig_h2a_landcover <- ggplot(landcover_plot_df,
-                            aes(x = reorder(land_cover_name, share),
-                                y = share)) +
-  geom_hline(yintercept = 0.5, linetype = "dashed",
-             colour = "grey40", linewidth = 0.5) +
-  geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
-                  colour = "#E66101", linewidth = 0.8, size = 0.6) +
-  scale_y_continuous(labels = scales::percent) +
-  scale_x_discrete(labels = pretty_lc) +
-  coord_flip() +
-  labs(x = "Land-cover Type",
-       y = "Estimated Share of SOR Within the Development Polygons") +
-  theme_classic() +
-  theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14),
-        axis.text  = element_text(size = 12)))
+                             aes(x = reorder(land_cover_name, share),
+                                 y = share)) +
+    geom_hline(yintercept = 0.5, linetype = "dashed",
+               colour = "grey40", linewidth = 0.5) +
+    geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
+                    colour = "#E66101", linewidth = 0.8, size = 0.6) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_discrete(labels = pretty_lc) +
+    coord_flip() +
+    labs(x = "Land-cover Type",
+         y = "Estimated Share of SOR Within the Development Polygons") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14)))
 
 # Save figure to file
 ggsave(filename = here("figures", "Figure_H2a_share_by_landcover_pointrange.png"),
@@ -501,19 +534,19 @@ slope_plot_df <- slope_lc_df |>
 
 # Plot figure
 (fig_h2b_slope <- ggplot(slope_plot_df,
-                        aes(x = reorder(land_cover_name, slope), y = slope)) +
-  geom_hline(yintercept = 0, linetype = "dashed",
-             colour = "grey40", linewidth = 0.5) +
-  geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
-                  colour = "#1f77b4", linewidth = 0.8, size = 0.6) +
-  coord_flip() +
-  scale_x_discrete(labels = pretty_lc) +
-  labs(x = "Land cover",
-       y = "Effect of log(area) on polygon share (logit-scale slope)") +
-  theme_classic() +
-  theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14),
-        axis.text  = element_text(size = 12)))
+                         aes(x = reorder(land_cover_name, slope), y = slope)) +
+    geom_hline(yintercept = 0, linetype = "dashed",
+               colour = "grey40", linewidth = 0.5) +
+    geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
+                    colour = "#1f77b4", linewidth = 0.8, size = 0.6) +
+    coord_flip() +
+    scale_x_discrete(labels = pretty_lc) +
+    labs(x = "Land cover",
+         y = "Effect of log(area) on polygon share (logit-scale slope)") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 14),
+          axis.text = element_text(size = 12)))
 
 # This figure isn't telling us much so I won't save it
 
@@ -544,26 +577,29 @@ polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
 
 # Create figure
 (fig_presence_predictions <- ggplot(pred_df_presence,
-                                   aes(x = log_area_c, y = predicted,
-                                       colour = polygon_type, fill = polygon_type)) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
-  geom_line(linewidth = 1.2) +
-  facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
-             labeller = as_labeller(pretty_lc)) +
-  scale_colour_manual(values = polygon_colours, name = "Area type") +
-  scale_fill_manual(values = polygon_colours, name = "Area type") +
-  scale_y_continuous(labels = scales::percent) +
-  labs(x = expression(paste("log(Area (m"^2, "))")),
-       y = "Probability of Unit Containing Any SOR") +
-  theme_classic() +
-  theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 16),
-        axis.text = element_text(size = 14),
-        strip.background  = element_rect(fill = "grey90", colour = "black"),
-        strip.text = element_text(size = 14, face = "bold"),
-        legend.position  = "right",
-        legend.title = element_text(size = 16),
-        legend.text = element_text(size = 14)))
+                                    aes(x = log_area_c, y = predicted,
+                                        colour = polygon_type, fill = polygon_type)) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+    geom_line(linewidth = 1.2) +
+    facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
+               labeller = as_labeller(pretty_lc)) +
+    scale_colour_manual(values = polygon_colours, name = "Area type") +
+    scale_fill_manual(values = polygon_colours, name = "Area type") +
+    scale_y_continuous(labels = scales::percent) +
+    # area on the x-axis in hectares (log-spaced); min & max marked
+    scale_x_continuous(breaks = log(breaks_m2_pres) - mean_log_presence,
+                       labels = ha_label(breaks_m2_pres)) +
+    labs(x = "Area (ha)",
+         y = "Probability of Unit Containing Any SOR") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          strip.background  = element_rect(fill = "grey90", colour = "black"),
+          strip.text = element_text(size = 14, face = "bold"),
+          legend.position = "right",
+          legend.title = element_text(size = 16),
+          legend.text = element_text(size = 14)))
 
 # Save figure to file
 ggsave(filename = here("figures", "Figure_H1_presence_by_side_and_landcover.png"),
