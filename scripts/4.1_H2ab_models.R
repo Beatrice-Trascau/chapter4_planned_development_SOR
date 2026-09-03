@@ -265,7 +265,7 @@ print(random_effects_presence)
 
 # 7. HYPOTHESIS TESTING --------------------------------------------------------
 
-## 7.1. H2a - is the polygon share of SOR above 0.5 (i.e. the intercept)?
+## 7.1. H2a - is the polygon share of SOR above 0.5 (i.e. the intercept)? ------
 cat("H2a: polygons hold a greater (area-adjusted) share of paired SOR than\n")
 cat("     their buffers (share > 0.5).\n\n")
 
@@ -275,6 +275,8 @@ emm_overall <- emmeans(best_split, ~ 1, offset = 0, type = "response")
 
 cat("Estimated polygon share of records (averaged over land cover):\n")
 print(summary(emm_overall))
+# 1        prob      SE  df asymp.LCL asymp.UCL
+# overall 0.402 0.00623 Inf     0.389     0.414
 
 # Get estimate and confidence interval and convert it to scales that can be used in the manuscript
 emm_df <- as.data.frame(emm_overall)
@@ -606,5 +608,54 @@ ggsave(filename = here("figures", "Figure_H1_presence_by_side_and_landcover.png"
        plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
 ggsave(filename = here("figures", "Figure_H1_presence_by_side_and_landcover.pdf"),
        plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
+
+# 9. SUMMARY STATISTICS --------------------------------------------------------
+
+# Get the % of polygons and buffers with any records at all
+presence_summary <- model_data |>
+  group_by(polygon_type) |>
+  summarise(n_sides = n(),
+            n_with_records = sum(n_occurrences > 0),
+            pct_with_records = round(100 * mean(n_occurrences > 0), 1),
+            .groups = "drop")
+print(presence_summary)
+# polygon_type n_sides n_with_records pct_with_records
+# <fct>          <int>          <int>            <dbl>
+#   1 Buffer        129881          16748             12.9
+# 2 Development   129881          11872              9.1
+
+# Get the number of occurrence counds across all polygons and buffers (with 0s included)
+occ_summary_all <- model_data |>
+  group_by(polygon_type) |>
+  summarise(mean = round(mean(n_occurrences), 2),
+            median = median(n_occurrences),
+            q25 = quantile(n_occurrences, 0.25),
+            q75 = quantile(n_occurrences, 0.75),
+            IQR = IQR(n_occurrences),
+            max = max(n_occurrences),
+            .groups = "drop")
+print(occ_summary_all)
+# polygon_type  mean median   q25   q75   IQR   max
+# <fct>        <dbl>  <int> <dbl> <dbl> <dbl> <int>
+#   1 Buffer        2.76      0     0     0     0  8818
+# 2 Development   2.49      0     0     0     0 22318
+
+# Get the number of occurrence records across polygons and buffers that have any records
+occ_summary_nonzero <- model_data |>
+  filter(n_occurrences > 0) |>
+  group_by(polygon_type) |>
+  summarise(n_sides = n(),
+            mean = round(mean(n_occurrences), 2),
+            median = median(n_occurrences),
+            q25 = quantile(n_occurrences, 0.25),
+            q75 = quantile(n_occurrences, 0.75),
+            IQR = IQR(n_occurrences),
+            max = max(n_occurrences),
+            .groups = "drop")
+print(occ_summary_nonzero)
+# polygon_type n_sides  mean median   q25   q75   IQR   max
+# <fct>          <int> <dbl>  <dbl> <dbl> <dbl> <dbl> <int>
+#   1 Buffer         16748  21.4      3     1    10     9  8818
+# 2 Development    11872  27.2      3     1    10     9 22318
 
 # END OF SCRIPT ----------------------------------------------------------------
