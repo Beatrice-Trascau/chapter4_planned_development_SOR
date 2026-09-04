@@ -408,7 +408,7 @@ ggsave(filename = here("figures", "Figure1cd_species_per_polygon.pdf"),
 
 # Combine Figure 1 and Figure 2 into single figure
 figure1_2_combined <- plot_grid(fig1a, fig1b, fig2a, fig2b,
-                                labels = c("a)", "b)", "c", "d"))
+                                labels = c("a)", "b)", "c)", "d)"))
 
 # Save figure as .png
 ggsave(filename = here("figures", "Figure1_2_combined.png"),
