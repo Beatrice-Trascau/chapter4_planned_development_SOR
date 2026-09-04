@@ -304,8 +304,8 @@ scale_factor <- n_zeros / max_nonzero_count
   labs(x = "Number of SOR") +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14),
-        axis.text  = element_text(size = 14)))
+        axis.title = element_text(size = 16),
+        axis.text  = element_text(size = 16)))
 
 # Figure 1b - Occurrence "Accummulation Curve"
 (fig1b <- ggplot(dev_data,
@@ -321,21 +321,21 @@ scale_factor <- n_zeros / max_nonzero_count
        y = expression(paste("log(Polygon Area(m"^2, "))"))) +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14),
-        axis.text  = element_text(size = 14)))
+        axis.title = element_text(size = 16),
+        axis.text  = element_text(size = 16)))
 
 # Combine the two plots into a single figure
 figure1 <- plot_grid(fig1a, fig1b, labels = c("a)", "b)"))
 
 # Save figure as .png
-ggsave(filename = here("figures", "Figure1_SOR_per_polygon.png"),
+ggsave(filename = here("figures", "Figure1ab_SOR_per_polygon.png"),
        plot = figure1,
        width = 20,
        height = 16,
        dpi = 600)
 
 # Save figure as .pdf
-ggsave(filename = here("figures", "Figure1_SOR_per_polygon.pdf"),
+ggsave(filename = here("figures", "Figure1ab_SOR_per_polygon.pdf"),
        plot = figure1,
        width = 20,
        height = 16,
@@ -369,8 +369,8 @@ scale_factor_sp <- n_zeros_sp / max_nonzero_count_sp
   labs(x = "Number of Species") +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14),
-        axis.text = element_text(size = 14)))
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 16)))
 
 # Figure 2b - Species area curve
 (fig2b <- ggplot(dev_data,
@@ -386,24 +386,42 @@ scale_factor_sp <- n_zeros_sp / max_nonzero_count_sp
        y = expression(paste("log(Polygon Area (m"^2, "))"))) +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 14),
-        axis.text = element_text(size = 14)))
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 16)))
 
 # Combine into single figure
-figure2 <- plot_grid(fig2a, fig2b, labels = c("a)", "b)"))
+figure2 <- plot_grid(fig2a, fig2b, labels = c("c)", "d)"))
 
 # Save figure as .png
-ggsave(filename = here("figures", "Figure2_species_per_polygon.png"),
+ggsave(filename = here("figures", "Figure1cd_species_per_polygon.png"),
        plot = figure2,
        width = 20,
        height = 16,
        dpi = 600)
 
 # Save figure as .pdf
-ggsave(filename = here("figures", "Figure2_species_per_polygon.pdf"),
+ggsave(filename = here("figures", "Figure1cd_species_per_polygon.pdf"),
        plot = figure2,
        width = 20,
        height = 16,
+       dpi = 600)
+
+# Combine Figure 1 and Figure 2 into single figure
+figure1_2_combined <- plot_grid(fig1a, fig1b, fig2a, fig2b,
+                                labels = c("a)", "b)", "c", "d"))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure1_2_combined.png"),
+       plot = figure1_2_combined,
+       width = 26,
+       height = 22,
+       dpi = 600)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure1_2_combined.pdf"),
+       plot = figure1_2_combined,
+       width = 26,
+       height = 22,
        dpi = 600)
 
 ## 9.3. Figure 4 - Taxonomic breakdown of SOR in polygons ----------------------
@@ -466,7 +484,7 @@ ggsave(filename = here("figures", "Figure4_taxonomic_breakdown_per_development_t
        height = 16,
        dpi = 600)
 
-## 9.4. Figure 5 - Number of SOR vs Number of Species per Polygon -------------
+## 9.4. Figure 8 - Number of SOR vs Number of Species per Polygon -------------
 
 # Plot figure
 (figure8 <- ggplot(dev_data,
