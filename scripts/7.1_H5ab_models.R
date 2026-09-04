@@ -470,7 +470,51 @@ saveRDS(list(h5a_overall_share = emm_overall, h5a_share_by_lc = emm_landcover,
              lrt_interaction = lrt_split),
         here("data", "models", "h5ab_betabin_inference.rds"))
 
-## 9.3. H5 presebce - are polygons less likely to be empty of alien SOR? -------
+## 9.3 Combined emmeans share table (overall + land-cover) ---------------------
+
+# Extract values
+grab <- function(df) {
+  lo <- df[[grep("LCL|lower", names(df), value = TRUE)[1]]]
+  hi <- df[[grep("UCL|upper", names(df), value = TRUE)[1]]]
+  data.frame(share = df$prob, conf.low = lo, conf.high = hi)
+}
+
+# Convert to df
+overall_row <- data.frame(
+  land_cover = "Overall (averaged)",
+  share = emm_overall_df$prob,
+  conf.low = emm_overall_df$asymp.LCL,
+  conf.high = emm_overall_df$asymp.UCL)
+
+landcover_rows <- data.frame(
+  land_cover = gsub("_", " ", as.character(emm_landcover_df$land_cover_name)),
+  share = emm_landcover_df$prob,
+  conf.low = emm_landcover_df$asymp.LCL,
+  conf.high = emm_landcover_df$asymp.UCL)
+
+# Combine into single table
+share_table <- bind_rows(overall_row, landcover_rows) |>
+  mutate(odds_ratio = round(share / (1 - share), 2),
+         index = round(2 * share - 1, 3),
+         share = round(share, 3),
+         conf.low = round(conf.low, 3),
+         conf.high = round(conf.high, 3)) |>
+  transmute(`Land cover`  = land_cover,
+            `Polygon share` = share,
+            `CI lower` = conf.low,
+            `CI upper` = conf.high,
+            `Odds ratio (polygon:buffer)` = odds_ratio,
+            `Index (2p-1)` = index)
+
+# Quick check 
+print(share_table)
+
+# Save to file
+write.csv(share_table,
+          here("figures", "Table_S_H5a_share_by_landcover_full.csv"),
+          row.names = FALSE)
+
+## 9.4. H5 presebce - are polygons less likely to be empty of alien SOR? -------
 
 # Get the probability of presence for polygons and buffers averaged over area and land-cover
 cat("\nH5 presence: development polygons vs buffers holding any alien record.\n\n")
@@ -508,6 +552,27 @@ pretty_lc <- function(x) {
   gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
 }
 
+# Back-transform the centred log-area axis to hectares
+mean_log_split    <- mean(log(pair_data$area_polygon))         # 10.1 (split)
+mean_log_presence <- mean(log(presence_data$area_m2_numeric))  # 10.2 (presence)
+
+# Get x axis min and max based on values
+breaks_m2_split <- c(min(pair_records$area_polygon),
+                     1e3, 1e4, 1e5, 1e6,
+                     max(pair_records$area_polygon))
+breaks_m2_pres  <- c(min(presence_data$area_m2_numeric),
+                     1e3, 1e4, 1e5, 1e6,
+                     max(presence_data$area_m2_numeric))
+
+# Label in hectares
+ha_label <- function(x_m2) {
+  v <- x_m2 / 1e4
+  vapply(v, function(a) {
+    if (a >= 1) formatC(a, format = "f", digits = 0, big.mark = ",")
+    else        formatC(signif(a, 2), format = "g")
+  }, character(1))
+}
+
 ## 10.1 Predicted share of Alien SOR by area and land-cover --------------------
 
 # Predict values
@@ -536,7 +601,9 @@ pred_df_split <- pred_df_split |>
     facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
                labeller = as_labeller(pretty_lc)) +
     scale_y_continuous(labels = scales::percent) +
-    labs(x = expression(paste("Log(Polygon Area (m"^2, "))")),
+    scale_x_continuous(breaks = log(breaks_m2_split) - mean_log_split,
+                       labels = ha_label(breaks_m2_split)) +
+    labs(x = "Polygon Area (ha)",
          y = "Predicted Share of Alien SOR Within the Development Polygons") +
     theme_classic() +
     theme(panel.grid = element_blank(), axis.title = element_text(size = 16),
@@ -582,7 +649,9 @@ polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
     scale_colour_manual(values = polygon_colours, name = "Area type") +
     scale_fill_manual(values = polygon_colours, name = "Area type") +
     scale_y_continuous(labels = scales::percent) +
-    labs(x = expression(paste("Log(Area (m"^2, "))")),
+    scale_x_continuous(breaks = log(breaks_m2_pres) - mean_log_presence,
+                       labels = ha_label(breaks_m2_pres)) +
+    labs(x = "Area (ha)",
          y = "Probability of Side Containing Any Alien SOR") +
     theme_classic() +
     theme(panel.grid = element_blank(), axis.title = element_text(size = 16),
@@ -629,5 +698,48 @@ print(tier_comparison)
 # Save the by-risk category comparison
 write.csv(tier_comparison,
           here("figures", "Table_H5ab_risk_tier_comparison.csv"), row.names = FALSE)
+
+# 13. SUMMARY STATISTICS -------------------------------------------------------
+
+# Build the three per-side datasets 
+model_data_high  <- build_side_data(occ_alien, model_data, high_impact_categories)
+model_data_lower <- build_side_data(occ_alien, model_data, lower_impact_categories)
+
+# Helper function to get: presence %, all-sides counts, and record-bearing counts, per side, tagged
+side_summary <- function(side, group_label) {
+  presence <- side |> group_by(polygon_type) |>
+    summarise(group = group_label, n_sides = n(),
+              n_with_records = sum(n_occurrences > 0),
+              pct_with_records = round(100 * mean(n_occurrences > 0), 1),
+              .groups = "drop")
+  nonzero <- side |> filter(n_occurrences > 0) |> group_by(polygon_type) |>
+    summarise(group = group_label, n_record_sides = n(),
+              mean = round(mean(n_occurrences), 2), median = median(n_occurrences),
+              q25 = quantile(n_occurrences, 0.25), q75 = quantile(n_occurrences, 0.75),
+              IQR = IQR(n_occurrences), max = max(n_occurrences), .groups = "drop")
+  list(presence = presence, nonzero = nonzero)
+}
+
+# Apply function 
+groups <- list(side_summary(model_data_alien, "All aliens"),
+               side_summary(model_data_high,  "High impact (SE+HI)"),
+               side_summary(model_data_lower, "Lower impact (PH/LO/NK/NR)"))
+
+# % of polygons and buffers with ANY records, by group
+presence_summary_alien <- bind_rows(lapply(groups, `[[`, "presence")) |>
+  select(group, polygon_type, n_sides, n_with_records, pct_with_records)
+cat("\n=== % of sides with any alien records ===\n"); print(presence_summary_alien)
+
+# Record counts on RECORD-BEARING sides only (meaningful median/IQR), by group
+occ_summary_nonzero_alien <- bind_rows(lapply(groups, `[[`, "nonzero")) |>
+  select(group, polygon_type, n_record_sides, mean, median, q25, q75, IQR, max)
+cat("\n=== Alien SOR per side, record-bearing sides only ===\n")
+print(occ_summary_nonzero_alien)
+
+# Save
+write.csv(presence_summary_alien,
+          here("figures", "Table_H5_presence_summary_by_side_alien.csv"), row.names = FALSE)
+write.csv(occ_summary_nonzero_alien,
+          here("figures", "Table_H5_SOR_summary_by_side_alien.csv"), row.names = FALSE)
 
 # END OF SCRIPT ----------------------------------------------------------------
