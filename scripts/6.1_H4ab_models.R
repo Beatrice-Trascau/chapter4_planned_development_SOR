@@ -310,7 +310,7 @@ make_presence_data <- function(side) {
 ## 4.2. Reshape df -------------------------------------------------------------
 
 # Use the function to reshape the data
-pair_data     <- make_pair_data(model_data_rl)
+pair_data <- make_pair_data(model_data_rl)
 presence_data <- make_presence_data(model_data_rl)
 
 # Check that we still have one row per pair
@@ -644,7 +644,7 @@ saveRDS(list(h4a_overall_share = emm_overall,
              lrt_interaction = lrt_split),
         here("data", "models", "h4ab_betabin_inference.rds"))
 
-## 9.5. H4 presence: are polygons less likely to be empty of red-listed SOR? ---
+## 9.5. H4 presence: are polygons less likely to be empty of red-listed SOR? ----
 
 cat("\nH4 presence: development polygons are LESS likely to hold zero red-listed\n")
 cat("             records than their paired buffers.\n\n")
@@ -689,12 +689,70 @@ saveRDS(list(presence_by_side = emm_presence,
              dev_vs_buffer    = contrast_presence),
         here("data", "models", "h4_presence_inference.rds"))
 
+## 9.6. Combined emmeans share table (overall + by land cover) -----------------
+
+# Use helper function to pull the share and confidence intervals from the emmeans summary data frame
+grab <- function(df) {
+  lo <- df[[grep("LCL|lower", names(df), value = TRUE)[1]]]
+  hi <- df[[grep("UCL|upper", names(df), value = TRUE)[1]]]
+  data.frame(share = df$prob, conf.low = lo, conf.high = hi)
+}
+
+# Make into df
+emm_overall_df <- as.data.frame(emm_overall)
+emm_landcover_df <- as.data.frame(emm_landcover)
+
+# Create pretty table to  use in the supplementary information
+share_table <- bind_rows(cbind(land_cover = "Overall (averaged)", grab(emm_overall_df)),
+                         cbind(land_cover = gsub("_", " ", as.character(emm_landcover_df$land_cover_name)),
+                               grab(emm_landcover_df))) |>
+  mutate(odds_ratio = round(share / (1 - share), 2),   # polygon:buffer OR
+         index = round(2 * share - 1, 3),          # symmetric index
+         share = round(share, 3),
+         conf.low = round(conf.low, 3),
+         conf.high = round(conf.high, 3)) |>
+  transmute(`Land cover` = land_cover,
+            `Polygon share` = share,
+            `CI lower` = conf.low,
+            `CI upper` = conf.high,
+            `Odds ratio (polygon:buffer)` = odds_ratio,
+            `Index (2p-1)` = index)
+
+# Print table
+print(share_table)
+
+# Save to file
+write.csv(share_table,
+          here("figures", "Table_S_H4a_share_by_landcover_full.csv"),
+          row.names = FALSE)
+
 # 10. PLOT PREDICTIONS ---------------------------------------------------------
 
 # Use a function to display the land-cover names corrrectly
 pretty_lc <- function(x) {
   x <- gsub("_", " ", x)
   gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
+}
+
+# Back-transform the centered log-area axis to hectares
+mean_log_split <- mean(log(pair_data$area_polygon))         # 10.1 (split)
+mean_log_presence <- mean(log(presence_data$area_m2_numeric))  # 10.3 (presence)
+
+# Use min and max for the tick marks
+breaks_m2_split <- c(min(pair_records$area_polygon),
+                     1e3, 1e4, 1e5, 1e6,
+                     max(pair_records$area_polygon))
+breaks_m2_pres  <- c(min(presence_data$area_m2_numeric),
+                     1e3, 1e4, 1e5, 1e6,
+                     max(presence_data$area_m2_numeric))
+
+# Label in hectares
+ha_label <- function(x_m2) {
+  v <- x_m2 / 1e4
+  vapply(v, function(a) {
+    if (a >= 1) formatC(a, format = "f", digits = 0, big.mark = ",")
+    else        formatC(signif(a, 2), format = "g")
+  }, character(1))
 }
 
 ## 10.1. H4ab - predicted share of Red-Listed SOR by area and land-cover -------
@@ -730,7 +788,9 @@ pred_df_split <- pred_df_split |>
     facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
                labeller = as_labeller(pretty_lc)) +
     scale_y_continuous(labels = scales::percent) +
-    labs(x = expression(paste("log(Polygon Area (m"^2, "))")),
+    scale_x_continuous(breaks = log(breaks_m2_split) - mean_log_split,
+                       labels = ha_label(breaks_m2_split)) +
+    labs(x = "Polygon Area (ha)",
          y = "Predicted Share of Red-listed SOR Within the Development Polygons") +
     theme_classic() +
     theme(panel.grid = element_blank(),
@@ -813,7 +873,9 @@ polygon_colours <- c("Buffer" = "#E66101", "Development" = "#5E3C99")
     scale_colour_manual(values = polygon_colours, name = "Area type") +
     scale_fill_manual(values = polygon_colours, name = "Area type") +
     scale_y_continuous(labels = scales::percent) +
-    labs(x = expression(paste("log(Area (m"^2, "))")),
+    scale_x_continuous(breaks = log(breaks_m2_pres) - mean_log_presence,
+                       labels = ha_label(breaks_m2_pres)) +
+    labs(x = "Area (ha)",
          y = "Probability of Side Containing Any Red-listed SOR") +
     theme_classic() +
     theme(panel.grid = element_blank(),
@@ -831,7 +893,7 @@ ggsave(filename = here("figures", "Figure_H4_presence_by_side_and_landcover.png"
 ggsave(filename = here("figures", "Figure_H4_presence_by_side_and_landcover.pdf"),
        plot = fig_presence_predictions, width = 14, height = 10, dpi = 600)
 
-## 11. LEAST CONCERN (LC) BASELINE MODELS --------------------------------------
+# 11. LEAST CONCERN (LC) BASELINE MODELS --------------------------------------
 
 # Fit models with the same form as the previous red-listed models (i.e. one beta binomial split model and one presence model)
 # Shape dfs
@@ -893,5 +955,40 @@ print(comparison_h4ab)
 write.csv(comparison_h4ab,
           here("figures", "Table_H4ab_redlisted_vs_LC_baseline.csv"),
           row.names = FALSE)
+
+# 13. SUMMARY STATISTICS (RED-LISTED RECORDS) ----------------------------------
+
+# % of polygons and buffers with ANY red-listed records
+presence_summary_rl <- model_data_rl |>
+  group_by(polygon_type) |>
+  summarise(n_sides = n(),
+            n_with_records = sum(n_occurrences > 0),
+            pct_with_records = round(100 * mean(n_occurrences > 0), 1),
+            .groups = "drop")
+print(presence_summary_rl)
+
+# Red-listed occurrence counts across ALL sides (zeros included)
+occ_summary_all_rl <- model_data_rl |>
+  group_by(polygon_type) |>
+  summarise(mean = round(mean(n_occurrences), 2), median = median(n_occurrences),
+            q25 = quantile(n_occurrences, 0.25), q75 = quantile(n_occurrences, 0.75),
+            IQR = IQR(n_occurrences), max = max(n_occurrences), .groups = "drop")
+print(occ_summary_all_rl)
+
+# Red-listed occurrence counts for RECORD-BEARING sides only (n > 0)
+occ_summary_nonzero_rl <- model_data_rl |>
+  filter(n_occurrences > 0) |>
+  group_by(polygon_type) |>
+  summarise(n_sides = n(), mean = round(mean(n_occurrences), 2),
+            median = median(n_occurrences), q25 = quantile(n_occurrences, 0.25),
+            q75 = quantile(n_occurrences, 0.75), IQR = IQR(n_occurrences),
+            max = max(n_occurrences), .groups = "drop")
+print(occ_summary_nonzero_rl)
+
+# Save the two most report-useful summaries
+write.csv(presence_summary_rl,
+          here("figures", "Table_H4_presence_summary_by_side_redlisted.csv"), row.names = FALSE)
+write.csv(occ_summary_nonzero_rl,
+          here("figures", "Table_H4_SOR_summary_by_side_redlisted.csv"), row.names = FALSE)
 
 # END OF SCRIPT ----------------------------------------------------------------
