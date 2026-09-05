@@ -412,6 +412,41 @@ saveRDS(list(presence_by_side = emm_presence,
              dev_vs_buffer    = contrast_presence),
         here("data", "models", "h1_presence_inference.rds"))
 
+## 7.6. H2 presence: odds ratio within each land-cover -------------------------
+
+# Extract contrast separately for each land-cover
+emm_pres_lc <- emmeans(best_presence, ~ polygon_type | land_cover_name,
+                       type = "response")
+or_by_lc <- contrast(emm_pres_lc, method = "revpairwise", type = "response")
+
+# Print summary
+print(summary(or_by_lc, infer = TRUE))
+
+# Create a neat table to use in the supplementary information
+or_lc_df <- as.data.frame(confint(or_by_lc))
+or_col <- grep("ratio|estimate", names(or_lc_df), value = TRUE)[1]
+lo_col <- grep("LCL|lower",      names(or_lc_df), value = TRUE)[1]
+hi_col <- grep("UCL|upper",      names(or_lc_df), value = TRUE)[1]
+p_df <- as.data.frame(summary(or_by_lc, infer = TRUE))
+
+# Extract the data you need
+or_table <- data.frame(
+  `Land cover` = gsub("_", " ", as.character(or_lc_df$land_cover_name)),
+  `Odds ratio (Dev/Buffer)` = round(or_lc_df[[or_col]], 3),
+  `CI lower` = round(or_lc_df[[lo_col]], 3),
+  `CI upper` = round(or_lc_df[[hi_col]], 3),
+  `p value` = ifelse(p_df$p.value < 0.001, "<0.001",
+                     round(p_df$p.value, 3)),
+  check.names = FALSE)
+
+# Quick look at the table
+print(or_table)
+
+# Save to file
+write.csv(or_table,
+          here("figures", "Table_H1_presence_OR_by_landcover.csv"),
+          row.names = FALSE)
+
 # 8. PREDICTION FIGURES --------------------------------------------------------
 
 # Little function to display the land-cover names properly
