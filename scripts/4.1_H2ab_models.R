@@ -425,26 +425,49 @@ print(summary(or_by_lc, infer = TRUE))
 # Create a neat table to use in the supplementary information
 or_lc_df <- as.data.frame(confint(or_by_lc))
 or_col <- grep("ratio|estimate", names(or_lc_df), value = TRUE)[1]
-lo_col <- grep("LCL|lower",      names(or_lc_df), value = TRUE)[1]
-hi_col <- grep("UCL|upper",      names(or_lc_df), value = TRUE)[1]
+lo_col <- grep("LCL|lower", names(or_lc_df), value = TRUE)[1]
+hi_col <- grep("UCL|upper", names(or_lc_df), value = TRUE)[1]
 p_df <- as.data.frame(summary(or_by_lc, infer = TRUE))
 
 # Extract the data you need
-or_table <- data.frame(
-  `Land cover` = gsub("_", " ", as.character(or_lc_df$land_cover_name)),
-  `Odds ratio (Dev/Buffer)` = round(or_lc_df[[or_col]], 3),
-  `CI lower` = round(or_lc_df[[lo_col]], 3),
-  `CI upper` = round(or_lc_df[[hi_col]], 3),
-  `p value` = ifelse(p_df$p.value < 0.001, "<0.001",
-                     round(p_df$p.value, 3)),
-  check.names = FALSE)
+or_table <- data.frame(`Land-cover` = gsub("_", " ", as.character(or_lc_df$land_cover_name)),
+                       `Odds ratio (Dev/Buffer)` = round(or_lc_df[[or_col]], 3),
+                       `CI lower` = round(or_lc_df[[lo_col]], 3),
+                       `CI upper` = round(or_lc_df[[hi_col]], 3),
+                       `p value` = ifelse(p_df$p.value < 0.001, "<0.001",
+                                          round(p_df$p.value, 3)),
+                       check.names = FALSE)
 
 # Quick look at the table
 print(or_table)
 
 # Save to file
 write.csv(or_table,
-          here("figures", "Table_H1_presence_OR_by_landcover.csv"),
+          here("figures", "Table_H1_presence_OddsRatio_by_landcover.csv"),
+          row.names = FALSE)
+
+## 7.7. H2 presence: probability of SOR presence by land-cover -----------------
+
+# Convert probability comparisons to df
+prob_df <- as.data.frame(summary(emm_pres_lc))
+
+# Make the df wide
+prob_wide <- prob_df |>
+  transmute(land_cover = gsub("_", " ", as.character(land_cover_name)),
+            polygon_type,
+            cell = sprintf("%.5f%% [%.5f–%.5f]",
+                           100 * prob, 100 * asymp.LCL, 100 * asymp.UCL)) |>
+  tidyr::pivot_wider(names_from = polygon_type, values_from = cell) |>
+  rename(`Land-cover` = land_cover,
+         `Buffer, P(any records)` = Buffer,
+         `Development, P(any records)` = Development)
+
+# Check the table
+print(prob_wide)
+
+# Save to file
+write.csv(prob_wide,
+          here("figures", "Table_H1_presence_probability_by_landcover_wide.csv"),
           row.names = FALSE)
 
 # 8. PREDICTION FIGURES --------------------------------------------------------
