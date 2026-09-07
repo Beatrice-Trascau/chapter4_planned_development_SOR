@@ -497,30 +497,50 @@ make_pred_df <- function(model, data) {
   pred <- ggpredict(model,
                     terms = c("log_area_km2 [n=100]", "polygon_type",
                               "land_cover_name"),
-                    type  = "fixed")
+                    type = "fixed")
   pred_df <- as.data.frame(pred) |>
     rename(log_area_km2 = x, polygon_type = group, land_cover_name = facet)
   ranges <- data |>
     group_by(land_cover_name, polygon_type) |>
     summarise(lo = min(log_area_km2), hi = max(log_area_km2), .groups = "drop")
-  pred_df |>
+  out <- pred_df |>
     left_join(ranges, by = c("land_cover_name", "polygon_type")) |>
     filter(log_area_km2 >= lo, log_area_km2 <= hi) |>
     select(-lo, -hi)
+  # get the overall area range (km2) for the x-axis breaks
+  attr(out, "area_km2_range") <- range(data$area_km2, na.rm = TRUE)
+  out
+}
+
+# Use a helper function to label hectares: whole numbers with a comma, sub-hectare to 2 sig figs
+ha_lab <- function(h) {
+  vapply(h, function(a) {
+    if (a >= 1) formatC(a, format = "f", digits = 0, big.mark = ",")
+    else        formatC(signif(a, 3), format = "g")
+  }, character(1))
 }
 
 # Helper function to assemble completeness figure
 completeness_figure <- function(pred_df) {
+  rng_km2 <- attr(pred_df, "area_km2_range") # c(min, max) in km2
+  rng_ha  <- rng_km2 * 100  # km2 -> ha
+  # min & max plus decades strictly inside the range
+  decades <- c(0.1, 1, 10, 100, 1000)
+  decades <- decades[decades > rng_ha[1] & decades < rng_ha[2]]
+  ha_breaks <- sort(c(rng_ha[1], decades, rng_ha[2]))
+  breaks_log  <- log(ha_breaks / 100) # ha -> km2 -> log(km2) axis units
+  
   ggplot(pred_df, aes(x = log_area_km2, y = predicted,
                       colour = polygon_type, fill = polygon_type)) +
     geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
     geom_line(linewidth = 1.2) +
-    facet_wrap(~land_cover_name, ncol = 3, labeller = as_labeller(pretty_lc)) +
-    scale_colour_manual(values = polygon_colours, name = "Area type") +
-    scale_fill_manual(values = polygon_colours, name = "Area type") +
+    facet_wrap(~land_cover_name, ncol = 3, scales = "free_y",
+               labeller = as_labeller(pretty_lc)) +
+    scale_colour_manual(values = polygon_colours, name = "Area Type") +
+    scale_fill_manual(values = polygon_colours, name = "Area Type") +
     scale_y_continuous(labels = scales::percent) +
-    labs(x = expression(paste("Log(Area (m"^2, "))")),
-         y = "Estimated Completeness") +
+    scale_x_continuous(breaks = breaks_log, labels = ha_lab(ha_breaks)) +
+    labs(x = "Area (ha)", y = "Estimated Completeness") +
     theme_classic() +
     theme(panel.grid = element_blank(),
           axis.title = element_text(size = 14),
@@ -530,10 +550,10 @@ completeness_figure <- function(pred_df) {
           strip.text = element_text(size = 12, face = "bold"))
 }
 
-## 9.1. Chao1 stricter model ---------------------------------------------------
+## 9.1. Chao1 additive model ---------------------------------------------------
 
 # Get predictions for area × polygon type × land cover
-pred_df_chao1 <- make_pred_df(h2d_chao1_model4_disp_poly, model_data_chao1_strict)
+pred_df_chao1 <- make_pred_df(h2d_chao1_model1_additive, model_data_chao1)
 
 # Main plot: Area × Polygon Type, faceted by Land Cover
 fig_chao1_predictions <- completeness_figure(pred_df_chao1)
@@ -563,13 +583,13 @@ ggsave(filename = here("figures", "Figure_H2d_ICE_predictions.pdf"),
 ## 10.1. Chao1 stricter model --------------------------------------------------
 
 # Get marginal means for polygon type (averaged across land cover and area)
-emmeans_polygon_h2d_chao1 <- emmeans(h2d_chao1_model4_disp_poly,
+emmeans_polygon_h2d_chao1 <- emmeans(h2d_chao1_model1_additive,
                                      specs = "polygon_type", type = "response")
 cat("Estimated completeness by side (Chao1):\n")
 print(summary(emmeans_polygon_h2d_chao1))
-# polygon_type response     SE  df asymp.LCL asymp.UCL
-# Buffer          0.552 0.0106 Inf     0.531     0.573
-# Development     0.561 0.0109 Inf     0.540     0.582
+# polygon_type response      SE  df asymp.LCL asymp.UCL
+# Buffer          0.419 0.00657 Inf     0.406     0.432
+# Development     0.423 0.00678 Inf     0.410     0.437
 
 # Calculate pairwise contrast
 contrast_polygon_h2d_chao1 <- contrast(emmeans_polygon_h2d_chao1,
@@ -604,5 +624,35 @@ saveRDS(list(chao1_by_side  = emmeans_polygon_h2d_chao1,
              ice_by_side    = emmeans_polygon_h2d_ice,
              ice_contrast   = contrast_polygon_h2d_ice),
         here("data", "models", "h2d_completeness_emmeans.rds"))
+
+# 11. SUMMARY STATISTICS (COMPLETENESS ESTIMATES) ------------------------------
+
+# Summarise each estimtor on itws on filtered data
+summarise_completeness <- function(data, value_col, estimator_label) {
+  data |>
+    group_by(polygon_type) |>
+    summarise(estimator = estimator_label,
+              n_sides = n(),
+              mean = round(mean(.data[[value_col]]), 3),
+              median = round(median(.data[[value_col]]), 3),
+              q25 = round(quantile(.data[[value_col]], 0.25), 3),
+              q75 = round(quantile(.data[[value_col]], 0.75), 3),
+              IQR = round(IQR(.data[[value_col]]), 3),
+              .groups = "drop") |>
+    select(estimator, polygon_type, n_sides, mean, median, q25, q75, IQR)
+}
+
+# Combine the two
+completeness_summary <- bind_rows(summarise_completeness(model_data_chao1, "completeness_chao1", "Chao1"),
+                                  summarise_completeness(model_data_ice_time, "completeness_ice_time", "ICE-time"))
+
+# Check the summary 
+cat("\n=== Completeness estimates by side ===\n")
+print(completeness_summary)
+
+# Save to file
+write.csv(completeness_summary,
+          here("figures", "Table_H2d_completeness_summary_by_side.csv"),
+          row.names = FALSE)
 
 # END OF SCRIPT ----------------------------------------------------------------
