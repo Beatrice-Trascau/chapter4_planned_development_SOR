@@ -525,7 +525,7 @@ completeness_figure <- function(pred_df) {
   rng_km2 <- attr(pred_df, "area_km2_range") # c(min, max) in km2
   rng_ha  <- rng_km2 * 100  # km2 -> ha
   # min & max plus decades strictly inside the range
-  decades <- c(0.1, 1, 10, 100, 1000)
+  decades <- c(0.1, 1, 10, 100)
   decades <- decades[decades > rng_ha[1] & decades < rng_ha[2]]
   ha_breaks <- sort(c(rng_ha[1], decades, rng_ha[2]))
   breaks_log  <- log(ha_breaks / 100) # ha -> km2 -> log(km2) axis units
