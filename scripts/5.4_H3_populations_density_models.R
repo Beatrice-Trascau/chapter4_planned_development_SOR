@@ -281,6 +281,19 @@ saveRDS(list(overall_trend = trend_overall,
 # Set colour scheme
 slope_colours <- c("Positive" = "#E66101", "Negative" = "#5E3C99")
 
+# Use a helper function to back-transform log1p population density axis to population/km2
+# N.B! Just like in the rest of the figures, the labels will stay log spaced
+# to make sure that the ~50% zero-population polygons aren't all cramped around
+# Also using min and max for the x axis
+pop_breaks_for <- function(log1p_vals) {
+  rng <- expm1(range(log1p_vals, na.rm = TRUE))      # back to people/km2
+  decs <- c(0, 1, 10, 100, 1000)
+  decs <- decs[decs > rng[1] & decs < rng[2]]
+  sort(unique(c(rng[1], decs, rng[2])))
+}
+pop_lab <- function(p) formatC(round(p), format = "d", big.mark = ",")
+# position on the log1p axis = log1p(people/km2)
+
 ## 8.1. Overall effort curve ---------------------------------------------------
 
 # From the additive model; land-cover held at reference (additive, so the SHAPE
@@ -297,11 +310,13 @@ pred_overall <- ggpredict(best_model_h3,
 (fig_overall <- ggplot(pred_overall, aes(x = x, y = predicted)) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "#5E3C99", alpha = 0.2) +
   geom_line(colour = "#5E3C99", linewidth = 1) +
-  labs(x = "log(1 + Population Density) (Population/km2)",
-       y = expression(paste("Predicted Record Density (Records/km"^2, ")"))) +
+  scale_x_continuous(breaks = log1p(pop_breaks_for(model_data$log1p_pop_density)),
+                     labels = pop_lab(pop_breaks_for(model_data$log1p_pop_density))) +
+  labs(x = expression(paste("Population Density (Population/km"^2, ")")),
+       y = expression(paste("Predicted SOR Density (SOR/km"^2, ")"))) +
   theme_classic() +
   theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 13), axis.text = element_text(size = 12)))
+        axis.title = element_text(size = 14), axis.text = element_text(size = 13)))
 
 # Save figures
 ggsave(here("figures", "Figure_H3pop_overall_effect.png"), fig_overall,
@@ -311,22 +326,38 @@ ggsave(here("figures", "Figure_H3pop_overall_effect.pdf"), fig_overall,
 
 ## 8.2. Effort slope by land cover (point-range) -------------------------------
 
+# Add significance levels to the df
+slopes_df <- slopes_df |>
+  mutate(fill_cat = case_when(conf.low <= 0 & conf.high >= 0 ~ "Not significant", 
+                              slope > 0 ~ "Positive (p < 0.05)",
+                              TRUE ~ "Negative (p < 0.05)"))
+
 # Plot figure
 (fig_slopes <- ggplot(slopes_df,
-                     aes(x = reorder(land_cover_name, slope), y = slope,
-                         colour = direction)) +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50", linewidth = 0.6) +
-  geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
-                  linewidth = 0.9, size = 0.6) +
-  scale_colour_manual(values = slope_colours, name = "Effect direction") +
-  scale_x_discrete(labels = pretty_lc) +
-  coord_flip() +
-  labs(x = "Land cover",
-       y = "Effect of Population Density on Record Density\n(slope, 95% CI)") +
-  theme_classic() +
-  theme(panel.grid = element_blank(),
-        axis.title = element_text(size = 13), axis.text = element_text(size = 12),
-        legend.position = "bottom"))
+                      aes(x = reorder(land_cover_name, slope), y = slope,
+                          colour = fill_cat)) +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50", linewidth = 0.6) +
+    geom_pointrange(aes(ymin = conf.low, ymax = conf.high),
+                    linewidth = 0.9, size = 0.6) +
+    scale_colour_manual(values = c("Positive (p < 0.05)" = "#E66101",
+                                   "Negative (p < 0.05)" = "#5E3C99",
+                                   "Not significant" = "grey65"),
+                        name = NULL) +
+    scale_x_discrete(labels = pretty_lc) +
+    coord_flip() +
+    labs(x = NULL,
+         y = "Effect of Population Density on Record Density\n(Slope, 95% CI)") +
+    theme_classic() +
+    theme(panel.grid = element_blank(),
+          axis.title = element_text(size = 14),
+          axis.text  = element_text(size = 13),
+          legend.position = "bottom",
+          legend.title = element_text(size = 13),
+          # extra left room so "Sparsely Vegetated" doesn't get clipped
+          plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 15),
+          # spread the legend items apart so they don't overlap
+          legend.key.spacing.x = unit(0.6, "cm"),
+          legend.text = element_text(size = 12, margin = margin(r = 8))))
 
 # Save figure
 ggsave(here("figures", "Figure_H3pop_slope_by_landcover.png"), fig_slopes,
@@ -334,7 +365,7 @@ ggsave(here("figures", "Figure_H3pop_slope_by_landcover.png"), fig_slopes,
 ggsave(here("figures", "Figure_H3pop_slope_by_landcover.pdf"), fig_slopes,
        width = 11, height = 7, dpi = 600)
 
-## 6.3. Pairwise slope contrasts (point-range) ---------------------------------
+## 8.3. Pairwise slope contrasts (point-range) ---------------------------------
 
 # Create df of the pairwise slope comparisons
 pw_df <- as.data.frame(summary(slope_contrasts, infer = TRUE))
@@ -344,20 +375,26 @@ ph <- grep("UCL|upper", names(pw_df), value = TRUE)[1]
 pw_df <- pw_df |>
   rename(estimate = all_of(ec), conf.low = all_of(pl), conf.high = all_of(ph)) |>
   mutate(contrast = gsub("_", " ", contrast),
-         significant = ifelse(p.value < 0.05, "Yes", "No"))
+         # three-way: non-sig -> grey; sig -> orange (positive) / purple (negative)
+         fill_cat = case_when(p.value >= 0.05  ~ "Not significant",
+                              estimate > 0 ~ "Positive (p < 0.05)",
+                              TRUE  ~ "Negative (p < 0.05)"))
 
 # Plot figure
 (fig_contrasts <- ggplot(pw_df,
                         aes(x = estimate, y = reorder(contrast, estimate),
-                            colour = significant)) +
+                            colour = fill_cat)) +
   geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
   geom_pointrange(aes(xmin = conf.low, xmax = conf.high), linewidth = 0.6) +
-  scale_colour_manual(values = c("No" = "grey65", "Yes" = "#5E3C99")) +
-  labs(x = "Difference in Effort Slopes (95% CI)", y = "Land-cover Comparison") +
+  scale_colour_manual(values = c("Positive (p < 0.05)" = "#E66101",
+                                 "Negative (p < 0.05)" = "#5E3C99",
+                                 "Not significant"     = "grey65"),
+                      name = NULL) +
+  labs(x = "Difference in Effort Slopes (95% CI)", y = NULL) +
   theme_classic() +
   theme(panel.grid = element_blank(),
         axis.title = element_text(size = 14),
-        axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 13), axis.text.x = element_text(size = 11),
         legend.position = "none"))
 
 # Save figure
@@ -395,10 +432,10 @@ pred_df <- predict_by_pop_lc(h3pop_nb_interaction, model_data)
     geom_line(colour = "#5E3C99", linewidth = 1) +
     facet_wrap(~land_cover_name, scales = "free_y", ncol = 3,
                labeller = as_labeller(pretty_lc)) +
-    labs(x = expression(atop("log(1 + Population Density)",
-                             "(Population/km"^2*")")),
-         y = expression(atop("Predicted SOR Density",
-                             "(SOR/km"^2*")")))+
+    scale_x_continuous(breaks = log1p(pop_breaks_for(pred_df$log1p_pop_density)),
+                       labels = pop_lab(pop_breaks_for(pred_df$log1p_pop_density))) +
+    labs(x = expression(paste("Population Density (Population/km"^2, ")")),
+         y = expression(paste("Predicted SOR Density (SOR/km"^2, ")"))) +
     theme_classic() +
     theme(panel.grid = element_blank(),
           axis.title = element_text(size = 14), axis.text = element_text(size = 12),
@@ -410,5 +447,47 @@ ggsave(here("figures", "Figure_H3pop_density_predictions_by_landcover.png"),
        fig_predictions, width = 14, height = 8, dpi = 600)
 ggsave(here("figures", "Figure_H3pop_density_predictions_by_landcover.pdf"),
        fig_predictions, width = 14, height = 8, dpi = 600)
+
+## 8.5 Combine into a single figure for the manuscript -------------------------
+
+# Out the slopes and contrasts side by side on the top row
+# Use the full width of the bottom row for the facet grid
+top_row <- plot_grid(fig_slopes, fig_contrasts,
+                     labels = c("a)", "b)"), ncol = 2, align = "h")
+
+# Combine the top row with the facet grid
+fig_h3pop_combined <- plot_grid(top_row, fig_predictions,
+                                labels = c("", "c)"), ncol = 1,
+                                rel_heights = c(1, 1.3))
+
+# Save to file
+ggsave(here("figures", "Figure_H3pop_combined.png"),
+       fig_h3pop_combined, width = 16, height = 14, dpi = 600)
+ggsave(here("figures", "Figure_H3pop_combined.pdf"),
+       fig_h3pop_combined, width = 16, height = 14, dpi = 600)
+
+# 9. SUMMARY STATISTICS --------------------------------------------------------
+
+# Extract a summary of population density within development polygons
+pop_density_summary <- model_data |>
+  group_by(land_cover_name) |>
+  summarise(n_polygons = n(),
+            pct_zero_pop = round(100 * mean(pop_density == 0), 1),
+            mean = round(mean(pop_density), 1),
+            median = round(median(pop_density), 1),
+            q25 = round(quantile(pop_density, 0.25), 1),
+            q75 = round(quantile(pop_density, 0.75), 1),
+            IQR = round(IQR(pop_density), 1),
+            max = round(max(pop_density), 1),
+            .groups = "drop") |>
+  mutate(land_cover_name = gsub("_", " ", as.character(land_cover_name)))
+
+# Quick check that it looks ok
+print(pop_density_summary)
+
+# Save to file
+write.csv(pop_density_summary,
+          here("figures", "Table_H3pop_popdensity_summary_by_landcover.csv"),
+          row.names = FALSE)
 
 # END OF SCRIPT ----------------------------------------------------------------
