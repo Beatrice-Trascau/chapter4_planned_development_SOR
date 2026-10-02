@@ -346,7 +346,7 @@ slopes_df <- slopes_df |>
     scale_x_discrete(labels = pretty_lc) +
     coord_flip() +
     labs(x = NULL,
-         y = "Effect of Population Density on Record Density\n(Slope, 95% CI)") +
+         y = "Effect of Population Density on SOR Density\n(Slope, 95% CI)") +
     theme_classic() +
     theme(panel.grid = element_blank(),
           axis.title = element_text(size = 14),
@@ -438,9 +438,9 @@ pred_df <- predict_by_pop_lc(h3pop_nb_interaction, model_data)
          y = expression(paste("Predicted SOR Density (SOR/km"^2, ")"))) +
     theme_classic() +
     theme(panel.grid = element_blank(),
-          axis.title = element_text(size = 14), axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14), axis.text = element_text(size = 13),
           strip.background = element_rect(fill = "grey90", colour = "black"),
-          strip.text = element_text(size = 12, face = "bold")))
+          strip.text = element_text(size = 13, face = "bold")))
 
 # Save figure
 ggsave(here("figures", "Figure_H3pop_density_predictions_by_landcover.png"),
