@@ -274,7 +274,7 @@ risk_shared_y <- list(scale_y_continuous(labels = scales::percent, breaks = risk
    scale_y_continuous(labels = scales::percent,
                       expand = expansion(mult = c(0, 0.02))) +
    scale_fill_manual(values = tax_colours, name = "Taxonomic Group") +
-   labs(x = "Development Category", y = "Proportion of SOR") +
+   labs(x = "Development category", y = "Proportion of SOR") +
    base_theme)
 
 # Panel b - red list, SOR
@@ -360,8 +360,8 @@ risk_shared_y <- list(scale_y_continuous(labels = scales::percent, breaks = risk
 
 # Use fixed guide_area to have the same relative width for the legend across plots
 legend_w <- 0.7
-row_taxo  <- (panel_a | guide_area()) +
-  plot_layout(widths = c(2, legend_w), guides = "collect")
+row_taxo  <- (panel_a + guide_area()) +
+  plot_layout(design = "AAB", widths = c(1, 1.35, legend_w), guides = "collect")
 row_red   <- (panel_b | panel_c | guide_area()) +
   plot_layout(widths = c(1, 1, legend_w), guides = "collect")
 row_alien <- (panel_d | panel_e | guide_area()) +
@@ -376,14 +376,14 @@ combined_figure <- (row_taxo / row_red / row_alien / row_risk) +
   theme(plot.tag = element_text(face = "bold", size = 16),
         legend.justification = "left")
 
-# Chek if looks ok
+# Check if looks ok
 combined_figure
 
-# 6. SAVE FIGURE ---------------------------------------------------------------
-
+# Save figure as png
 ggsave(here("figures", "Figure_combined_taxo_redlist_alien.png"),
        plot = combined_figure, width = 15, height = 26, dpi = 600)
 
+# Save as pdf
 ggsave(here("figures", "Figure_combined_taxo_redlist_alien.pdf"),
        plot = combined_figure, width = 15, height = 26)
 
