@@ -604,6 +604,13 @@ write.csv(prob_wide,
           here("figures", "Table_H5_presence_probability_by_landcover_wide.csv"),
           row.names = FALSE)
 
+## 9.7. Test for difference in SOR between Polygons & Buffers ------------------
+
+emm_link <- emmeans(best_split, ~ 1, offset = 0)  # link (logit) scale
+test(emm_link, null = 0)
+# 1       emmean     SE  df z.ratio p.value
+# overall -0.182 0.0398 Inf  -4.576 <0.0001
+
 # 10. ALL ALIENS MODELS PREDICTION FIGURES -------------------------------------
 
 # Define a function to display land-cover names neatly
