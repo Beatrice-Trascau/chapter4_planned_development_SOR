@@ -133,7 +133,7 @@ AICtab(h2ab_betabin_full, h2ab_betabin_additive, base = TRUE)
 # Get the best model
 best_split <- h2ab_betabin_additive
 
-## 3.3. H1 presence model with full interaction  ------------------------
+## 3.3. H1 presence model with full interaction  -------------------------------
 
 # Do polygons differ from buffers in the probability of having any records at all?
 # Set up model
@@ -469,6 +469,13 @@ print(prob_wide)
 write.csv(prob_wide,
           here("figures", "Table_H1_presence_probability_by_landcover_wide.csv"),
           row.names = FALSE)
+
+## 7.8. H2: test for difference in SOR between Polygons & Buffers --------------
+
+emm_link <- emmeans(best_split, ~ 1, offset = 0)  # link (logit) scale
+test(emm_link, null = 0)
+# 1       emmean     SE  df z.ratio p.value
+# overall -0.399 0.0259 Inf -15.375 <0.0001
 
 # 8. PREDICTION FIGURES --------------------------------------------------------
 
