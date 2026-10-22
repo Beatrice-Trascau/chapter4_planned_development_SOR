@@ -521,7 +521,7 @@ ha_lab <- function(h) {
 }
 
 # Helper function to assemble completeness figure
-completeness_figure <- function(pred_df) {
+completeness_figure <- function(pred_df, facet_scales = "free_y") {
   rng_km2 <- attr(pred_df, "area_km2_range") # c(min, max) in km2
   rng_ha  <- rng_km2 * 100  # km2 -> ha
   # min & max plus decades strictly inside the range
@@ -534,12 +534,15 @@ completeness_figure <- function(pred_df) {
                       colour = polygon_type, fill = polygon_type)) +
     geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
     geom_line(linewidth = 1.2) +
-    facet_wrap(~land_cover_name, ncol = 3, scales = "free_y",
+    facet_wrap(~land_cover_name, ncol = 3, scales = facet_scales,
                labeller = as_labeller(pretty_lc)) +
     scale_colour_manual(values = polygon_colours, name = "Area Type") +
     scale_fill_manual(values = polygon_colours, name = "Area Type") +
-    scale_y_continuous(labels = scales::percent) +
     scale_x_continuous(breaks = breaks_log, labels = ha_lab(ha_breaks)) +
+    scale_y_continuous(labels = scales::label_percent(accuracy = 1),
+                       breaks = c(0.35, 0.40, 0.45, 0.5),
+                       expand = expansion(mult = 0)) +
+    coord_cartesian(ylim = c(0.35, 0.5)) +
     labs(x = "Area (ha)", y = "Estimated Completeness") +
     theme_classic() +
     theme(panel.grid = element_blank(),
@@ -556,7 +559,7 @@ completeness_figure <- function(pred_df) {
 pred_df_chao1 <- make_pred_df(h2d_chao1_model1_additive, model_data_chao1)
 
 # Main plot: Area × Polygon Type, faceted by Land Cover
-fig_chao1_predictions <- completeness_figure(pred_df_chao1)
+(fig_chao1_predictions <- completeness_figure(pred_df_chao1, facet_scales = "fixed"))
 
 # Save plot to file
 ggsave(filename = here("figures", "Figure_H2d_chao1_predictions.png"),
