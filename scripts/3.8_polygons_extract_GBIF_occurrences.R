@@ -353,7 +353,11 @@ plot_broken_hist <- function(data, var, x_lab, n_bins = 50,
   x_range    <- c(-bin_width * 1.5, max(bin_breaks) + bin_width * 0.5)
   
   # Legend (only added to the panel that should carry it)
-  legend_layer <- if (show_legend) legend_theme else theme(legend.position = "none")
+  legend_layer <- if (show_legend) {
+    legend_theme +
+      theme(legend.position.inside      = c(0.98, 0.97),
+            legend.justification.inside = c(1, 1))
+  } else theme(legend.position = "none")
   
   # Base: scales and theme only, bars are added per panel
   base <- ggplot(all_counts) +
@@ -392,8 +396,7 @@ plot_broken_hist <- function(data, var, x_lab, n_bins = 50,
                     expand = FALSE, clip = "off") +
     break_mark(1) +
     labs(x = x_lab, y = NULL) +
-    theme(plot.margin = margin(3, 5.5, 5.5, 5.5)) +
-    legend_layer
+    theme(plot.margin = margin(3, 5.5, 5.5, 5.5))
   
   # Top panel: only the part of the tall bars above the break
   top <- base +
@@ -409,7 +412,8 @@ plot_broken_hist <- function(data, var, x_lab, n_bins = 50,
     theme(axis.text.x  = element_blank(),
           axis.ticks.x = element_blank(),
           axis.line.x  = element_blank(),
-          plot.margin  = margin(5.5, 5.5, 3, 5.5))
+          plot.margin  = margin(5.5, 5.5, 3, 5.5)) +
+    legend_layer
   
   # Stack the panels and add one shared y-axis title
   panels  <- plot_grid(top, bottom, ncol = 1, align = "v",
@@ -420,25 +424,29 @@ plot_broken_hist <- function(data, var, x_lab, n_bins = 50,
 }
 
 # Area vs SOR/species scatter, Development and Buffer
-plot_area_scatter <- function(data, var, x_lab, show_legend = FALSE) {
+plot_area_scatter <- function(data, var, count_lab, show_legend = FALSE) {
   
-  ggplot(data, aes(x = .data[[var]] + 1, y = area_m2_numeric,
+  ggplot(data, aes(x = area_m2_numeric, y = .data[[var]] + 1,
                    colour = polygon_type, fill = polygon_type)) +
     geom_point(alpha = 0.2, size = 0.8, show.legend = FALSE) +
     geom_smooth(linewidth = 1.1, se = TRUE) +
     scale_colour_manual(values = type_colours, labels = type_labels, name = NULL) +
     scale_fill_manual(values = type_colours, labels = type_labels, name = NULL) +
     scale_x_log10(labels = scales::comma,
-                  breaks = c(1, 10, 100, 1000, 10000)) +
-    scale_y_log10(labels = scales::comma,
                   breaks = c(100, 1000, 10000, 100000, 1000000)) +
-    labs(x = x_lab,
-         y = expression(paste("log(Polygon Area (m"^2, "))"))) +
+    scale_y_log10(labels = scales::comma,
+                  breaks = c(1, 10, 100, 1000, 10000)) +
+    labs(x = expression(paste("log(Polygon Area (m"^2, "))")),
+         y = count_lab) +
     theme_classic() +
     theme(panel.grid = element_blank(),
           axis.title = element_text(size = 16),
           axis.text  = element_text(size = 16)) +
-    if (show_legend) legend_theme else theme(legend.position = "none")
+    if (show_legend) {
+      legend_theme +
+        theme(legend.position.inside      = c(0.02, 0.98),
+              legend.justification.inside = c(0, 1))
+    } else theme(legend.position = "none")
 }
 
 ## 9.1. Figure 1 - Number of SOR per polygon  ----------------------------------
@@ -477,7 +485,7 @@ fig2b <- plot_area_scatter(plot_data, "n_species",
                            "log(Number of Species + 1)", show_legend = TRUE)
 
 # Combine into single figure
-figure2 <- plot_grid(fig2a, fig2b, labels = c("c)", "d)"))
+(figure2 <- plot_grid(fig2a, fig2b, labels = c("c)", "d)")))
 
 # Save to file
 ggsave(here("figures", "Figure1cd_species_per_polygon.png"),
@@ -572,6 +580,41 @@ ggsave(filename = here("figures", "Figure4_taxonomic_breakdown_per_development_t
        width = 20,
        height = 16,
        dpi = 600)
+
+# Overall: % of all development-polygon SOR belonging to each group
+tax_table_overall <- polygon_tax_join |>
+  count(taxonomic_group, name = "n_SOR") |>
+  mutate(percent = round(100 * n_SOR / sum(n_SOR), 1),
+         taxonomic_group = factor(taxonomic_group, levels = names(tax_colours))) |>
+  arrange(taxonomic_group)
+
+# Quick look at the table
+print(tax_table_overall)
+
+# Wide version: % per development category, plus the overall column
+tax_table_wide <- tax_proportions |>
+  mutate(percent = round(100 * proportion, 1)) |>
+  dplyr::select(english_categories, taxonomic_group, percent) |>
+  tidyr::pivot_wider(names_from = english_categories,
+                     values_from = percent, values_fill = 0) |>
+  left_join(tax_table_overall |>
+              mutate(taxonomic_group = as.character(taxonomic_group)) |>
+              dplyr::select(taxonomic_group, `All categories` = percent),
+            by = "taxonomic_group") |>
+  mutate(taxonomic_group = factor(taxonomic_group, levels = names(tax_colours))) |>
+  arrange(taxonomic_group) |>
+  rename(`Taxonomic group` = taxonomic_group)
+
+# Brief check that numbers make sense
+print(tax_table_wide)
+
+# Save as tables
+write.csv(tax_table_overall,
+          here("data", "derived_data", "taxonomic_breakdown_overall.csv"),
+          row.names = FALSE)
+write.csv(tax_table_wide,
+          here("data", "derived_data", "taxonomic_breakdown_by_category.csv"),
+          row.names = FALSE)
 
 ## 9.5. Figure 8 - Number of SOR vs Number of Species per Polygon -------------
 
@@ -732,7 +775,7 @@ pct_labels <- c("< 10%", "10\u201325%", "25\u201340%", "40\u201360%",
 
 # Orange = more in buffers, purple = more in development polygons (as in Fig. 1)
 pct_colours <- c(setNames(scales::brewer_pal(palette = "PuOr")(7), pct_labels),
-                 "No SOR" = "grey85")
+                 "No SOR" = "grey40")
 
 # Inner class boundaries expressed as ratios (p / (100 - p)), for the spread plots
 inner_pct   <- pct_breaks[-c(1, length(pct_breaks))]
@@ -834,9 +877,9 @@ plot_pct_map <- function(pct_col, legend_title) {
                       values = pct_colours,
                       breaks = c(rev(pct_labels), "No SOR"),
                       drop   = FALSE) +
-    annotation_north_arrow(location = "tl", which_north = "true",
-                           pad_x = unit(0.2, "cm"), pad_y = unit(0.2, "cm"),
-                           style = north_arrow_fancy_orienteering()) +
+    # annotation_north_arrow(location = "tl", which_north = "true",
+    #                        pad_x = unit(0.2, "cm"), pad_y = unit(0.2, "cm"),
+    #                        style = north_arrow_fancy_orienteering()) +
     annotation_scale(location = "bl", width_hint = 0.25,
                      pad_x = unit(0.5, "cm"), pad_y = unit(0.5, "cm")) +
     theme_minimal() +
