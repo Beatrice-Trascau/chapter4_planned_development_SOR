@@ -1,8 +1,8 @@
 # Load here package
-library(DHARMa)
+library(lme4)
 
 # Get citation info
-cit <- citation("DHARMa")
+cit <- citation("lme4")
 
 # Extract authors
 authors <- paste(
@@ -19,7 +19,7 @@ year <- cit$year
 title <- cit$title
 
 # Extract version
-version <- as.character(packageVersion("DHARMa"))
+version <- as.character(packageVersion("lme4"))
 
 # Extract URL
 url <- cit$url
@@ -34,4 +34,4 @@ ris <- c("TY  - COMP",
          "ER  -")
 
 # Write .RIS reference to file
-writeLines(ris, here("references", "DHARMa.ris"))
+writeLines(ris, here("figures", "lme4.ris"))
