@@ -9,6 +9,11 @@
 library(here)
 source(here("scripts", "0_setup.R"))
 
+# Land-cover order (follows the ecotype codes in script 3.5)
+# (defined here because it is needed when the factor levels are set below)
+lc_levels <- c("Settlements", "Cropland", "Grassland", "Forest",
+               "Heathland", "Sparsely_vegetated", "Wetlands")
+
 # Load data
 # Model-ready dataset (one row per polygon/buffer) created in script 3.8
 model_data <- readRDS(here("data", "derived_data", "h2_polygon_buffer_data.rds"))
@@ -35,10 +40,6 @@ pretty_lc <- function(x) {
   x <- gsub("_", " ", x)
   gsub("(^|\\s)([a-z])", "\\1\\U\\2", x, perl = TRUE)
 }
-
-# Land-cover order (follows the ecotype codes in script 3.5)
-lc_levels <- c("Settlements", "Cropland", "Grassland", "Forest",
-               "Heathland", "Sparsely_vegetated", "Wetlands")
 
 ## 1.2. Shared themes ----------------------------------------------------------
 
@@ -215,6 +216,162 @@ plot_area_scatter <- function(data, var, count_lab, show_legend = FALSE) {
     } else theme(legend.position = "none")
 }
 
+## 1.5. Example pair inset (replaces the legend in panel a) --------------------
+
+# The inset shows one real Development Polygon - Buffer pair in the same colours
+# as the histogram, with its SOR drawn as dots, so it also works as the legend.
+# The occurrence coordinates are not stored in the script 3.8 outputs, so they
+# are read from the cleaned GBIF file once and the chosen pair is cached.
+# Delete the cache file (or set example_pair_id) to choose a different pair.
+
+example_cache   <- here("data", "derived_data", "fig1a_example_pair.rds")
+example_pair_id <- NULL         # set to a pair_id to force a specific pair
+
+# Selection criteria for the automatic choice
+example_sor_range     <- c(10, 40)  # SOR in BOTH the polygon and its buffer
+example_min_locations <- 6          # distinct dot locations in BOTH areas
+
+# Read coordinates for a set of gbifIDs, loading only the three needed columns
+read_occurrence_coords <- function(ids) {
+  occ_file  <- here("data", "derived_data", "clean_occurrences_1km.txt")
+  occ_cols  <- names(read.csv(occ_file, nrows = 1))
+  keep_cols <- c("gbifID", "decimalLongitude", "decimalLatitude")
+  read.csv(occ_file,
+           colClasses = ifelse(occ_cols %in% keep_cols, NA, "NULL")) |>
+    filter(gbifID %in% ids,
+           !is.na(decimalLongitude), !is.na(decimalLatitude)) |>
+    distinct(gbifID, .keep_all = TRUE)
+}
+
+# Choose a pair (or use chosen_pair) and return its geometries and SOR points
+build_example_pair <- function(model_data, chosen_pair = NULL,
+                               sor_range = example_sor_range,
+                               min_locations = example_min_locations) {
+  
+  # Polygon and buffer geometries (script 3.5) and SOR per area (script 3.8)
+  geoms <- readRDS(here("data", "derived_data", "polygon_buffer_data.rds")) |>
+    dplyr::select(pair_id, polygon_type)
+  occ_join <- readRDS(here("data", "derived_data",
+                           "h2d_polygon_buffer_occurrence_join.rds")) |>
+    dplyr::select(gbifID, pair_id, polygon_type) |>
+    mutate(polygon_type = as.character(polygon_type))
+  
+  if (is.null(chosen_pair)) {
+    
+    # Pairs where both the polygon and its buffer have a moderate number of SOR
+    sor_ok <- model_data |>
+      group_by(pair_id) |>
+      summarise(ok = n() == 2 &
+                  all(n_occurrences >= sor_range[1] &
+                        n_occurrences <= sor_range[2]),
+                .groups = "drop") |>
+      filter(ok) |>
+      pull(pair_id)
+    
+    # Single-part development polygons only, scored by compactness
+    # (Polsby-Popper: 4 * pi * area / perimeter^2, where 1 = a circle)
+    dev <- geoms |>
+      filter(polygon_type == "Development", pair_id %in% sor_ok)
+    single_part <- vapply(st_geometry(dev),
+                          function(g) !inherits(g, "MULTIPOLYGON") || length(g) == 1,
+                          logical(1))
+    dev <- dev[single_part, ]
+    dev$compactness <- 4 * pi * as.numeric(st_area(dev)) /
+      as.numeric(st_length(st_boundary(dev)))^2
+    
+    candidates <- dev$pair_id
+    cat("Candidate pairs for the inset:", length(candidates), "\n")
+    stopifnot(length(candidates) > 0)
+  } else {
+    candidates <- chosen_pair
+  }
+  
+  # Coordinates of the SOR in the candidate pairs
+  cand_occ <- occ_join |> filter(pair_id %in% candidates)
+  cand_occ <- cand_occ |>
+    inner_join(read_occurrence_coords(unique(cand_occ$gbifID)), by = "gbifID")
+  
+  if (is.null(chosen_pair)) {
+    
+    # Many SOR share exact coordinates, so require enough distinct dot
+    # locations in both areas, then take the most compact polygon
+    locs <- cand_occ |>
+      distinct(pair_id, polygon_type, decimalLongitude, decimalLatitude) |>
+      count(pair_id, polygon_type) |>
+      group_by(pair_id) |>
+      summarise(min_locs = if (n() == 2) min(n) else 0L, .groups = "drop")
+    
+    chosen_pair <- dev |>
+      st_drop_geometry() |>
+      inner_join(locs, by = "pair_id") |>
+      filter(min_locs >= min_locations) |>
+      dplyr::slice_max(compactness, n = 1, with_ties = FALSE) |>
+      pull(pair_id)
+    
+    if (length(chosen_pair) == 0) {
+      stop("No pair meets the criteria - relax example_sor_range or ",
+           "example_min_locations")
+    }
+  }
+  
+  pair_geoms <- geoms |>
+    filter(pair_id == chosen_pair) |>
+    mutate(polygon_type = as.character(polygon_type))
+  pair_points <- cand_occ |>
+    filter(pair_id == chosen_pair) |>
+    st_as_sf(coords = c("decimalLongitude", "decimalLatitude"), crs = 4326) |>
+    st_transform(st_crs(pair_geoms))
+  
+  # Check that the pair is complete and every dot falls in one of the two areas
+  stopifnot(nrow(pair_geoms) == 2,
+            setequal(pair_geoms$polygon_type, c("Development", "Buffer")),
+            all(lengths(st_intersects(pair_points, pair_geoms)) > 0))
+  
+  cat("Example pair:", chosen_pair, "|",
+      paste(names(table(pair_points$polygon_type)),
+            table(pair_points$polygon_type), "SOR", collapse = ", "), "\n")
+  
+  list(pair_id = chosen_pair, geoms = pair_geoms, points = pair_points)
+}
+
+# Load the cached pair, or build it (slow the first time: reads the GBIF file)
+if (file.exists(example_cache)) example_pair <- readRDS(example_cache)
+if (!file.exists(example_cache) ||
+    (!is.null(example_pair_id) && example_pair$pair_id != example_pair_id)) {
+  example_pair <- build_example_pair(model_data, chosen_pair = example_pair_id)
+  saveRDS(example_pair, example_cache)
+}
+
+# Map of the pair: buffer, development polygon and SOR dots (no labels)
+plot_example_inset <- function(example, dot_alpha = 0.5) {
+  
+  # Draw the buffer first so the development polygon sits on top
+  g <- example$geoms |>
+    mutate(polygon_type = factor(polygon_type, levels = c("Buffer", "Development"))) |>
+    arrange(polygon_type)
+  
+  ggplot() +
+    geom_sf(data = g, aes(fill = polygon_type),
+            colour = "grey25", linewidth = 0.3, alpha = 0.85) +
+    # dot_alpha sets how see-through the dots are (1 = fully dark)
+    geom_sf(data = example$points, shape = 21, size = 1.8,
+            fill = "black", colour = "white", stroke = 0.3,
+            alpha = dot_alpha) +
+    scale_fill_manual(values = type_colours) +
+    # annotation_scale(location = "bl", width_hint = 0.25, style = "ticks",
+    #                  text_cex = 1, line_width = 0.6) +
+    coord_sf(datum = NA, expand = TRUE, clip = "off") +
+    theme_void() +
+    theme(legend.position = "none",
+          plot.background = element_rect(fill = scales::alpha("white", 0.8),
+                                         colour = NA))
+}
+
+example_inset <- plot_example_inset(example_pair)
+
+# Position of the inset within panel a (fractions of the panel; tweak if needed)
+inset_pos <- c(x = 0.48, y = 0.50, width = 0.50, height = 0.47)
+
 # 2. SHARED SETTINGS FOR ROWS 3-5 ----------------------------------------------
 
 # Shared theme (matches the font sizes in rows 1-2)
@@ -343,9 +500,11 @@ fig_j <- plot_violin(plot_data, "n_species", "land_cover_name",
 
 # 5. ROWS 1-2: SOR AND SPECIES PER AREA ----------------------------------------
 
-# Row 1 carries the legend for the whole figure
-fig1a <- plot_broken_hist(plot_data, "n_occurrences", "Number of SOR",
-                          show_legend = TRUE)
+# Row 1: panel a has no legend; the example pair inset takes its place
+fig1a <- ggdraw(plot_broken_hist(plot_data, "n_occurrences", "Number of SOR")) +
+  draw_plot(example_inset,
+            x = inset_pos["x"], y = inset_pos["y"],
+            width = inset_pos["width"], height = inset_pos["height"])
 fig1b <- plot_area_scatter(plot_data, "n_occurrences",
                            "log(Number of SOR + 1)", show_legend = TRUE)
 
