@@ -1,20 +1,26 @@
 ##----------------------------------------------------------------------------##
-# THESIS
-# CLC2018_level2_map
+# THESIS FIGURES
+# CLC2018_level2_map & Whittaker's Biome Plot
 # This script creates a map of CORINE Land Cover (CLC) Status 2018 for mainland
-# Norway, reclassified to CLC Level 2, for the Methods section of the thesis
+# Norway, reclassified to CLC Level 2 and a modified version of Whittaker's
+# biome plot for the Methods section of the thesis
 ##----------------------------------------------------------------------------##
 
-# 1. SETUP ---------------------------------------------------------------------
+# 0. SETUP ---------------------------------------------------------------------
 
 # Source setup file 
 library(here)
+library(plotbiomes)
+library(ggplot2)
+library(dplyr)
 source(here("scripts", "0_setup.R"))
 
 # Define CRS to use for the map (ETRS89 / UTM zone 33N - matches project data)
 project_crs <- 25833
 
-# 2. LOAD DATA -----------------------------------------------------------------
+# 1. CLC 2018 MAP --------------------------------------------------------------
+
+## 1.1. Load data --------------------------------------------------------------
 
 # Load CLC Status 2018 (2024 still not available :()
 clc <- rast(here("data", "raw_data", "U2018_CLC2018_V2020_20u1.tif"))
@@ -27,9 +33,7 @@ norway_sf <- geodata::gadm(country = "NOR", level = 0, path = tempdir(),
                            version = "latest") |>
   st_as_sf()
 
-# 3. PREPARE THE CLC LAYER -----------------------------------------------------
-
-## 3.1. Crop and mask to Norway ------------------------------------------------
+## 1.2. Crop and mask CLC to Norway---------------------------------------------
 
 # Transform Norway boundary to have the same CRS as CLC
 norway_clc_crs <- st_transform(norway_sf, crs(clc))
@@ -37,7 +41,7 @@ norway_clc_crs <- st_transform(norway_sf, crs(clc))
 # Crop and mask
 clc_nor <- crop(clc, vect(norway_clc_crs), mask = TRUE)
 
-## 3.2. Reclassify to CLC Level 2 ----------------------------------------------
+## 1.3. Reclassify to CLC Level 2 ----------------------------------------------
 
 # CLC Level 3 codes in the order of the GRID_CODE values (1-44) of the raster
 clc_level3_codes <- c(111, 112, 121, 122, 123, 124, 131, 132, 133, 141, 142,
@@ -60,7 +64,7 @@ if (clc_max <= 48) {
 clc_l2 <- classify(clc_nor, rcl, others = NA)
 names(clc_l2) <- "clc_level2"
 
-## 3.3. Area per Level 2 class (for the Methods text) ---------------------------
+## 1.4. Area per Level 2 class (for the Methods text) --------------------------
 
 # Cells are 100 x 100 m (1 ha) in the equal-area EPSG:3035, so km2 = count / 100
 clc_l2_names <- c("11" = "Urban Fabric",
@@ -89,7 +93,7 @@ clc_l2_area <- freq(clc_l2) |>
 # Check the values
 print(clc_l2_area)
 
-## 3.4. Project to the map CRS -------------------------------------------------
+## 1.5. Project to the map CRS -------------------------------------------------
 
 # USe nearest neighbour so class codes are not averaged
 clc_l2_utm <- project(clc_l2, paste0("EPSG:", project_crs),
@@ -106,7 +110,7 @@ levels(clc_l2_utm) <- data.frame(value = present_codes,
 # Convert the Norway boundary ito the map CRS
 norway_utm <- st_transform(norway_sf, project_crs)
 
-# 4. PLOT MAP ------------------------------------------------------------
+## 1.6. Plot map ---------------------------------------------------------------
 
 # Define colour pallete (attempred colour blind-friendly pallete)
 clc_l2_palette <- c("11" = "#B2182B", # Urban fabric
@@ -175,4 +179,53 @@ ggsave(filename = here("figures", "ThesisMethodsFigure_CLC2018_level2_Norway.png
 ggsave(filename = here("figures", "ThesisMethodsFigure_CLC2018_level2_Norway.pdf"),
        plot = clc_map, width = 180, height = 190, units = "mm")
 
+# 2. BIOME PLOT ----------------------------------------------------------------
+
+# Get data adn the vector with the classic colours
+data("Whittaker_biomes", package = "plotbiomes")
+data("Ricklefs_colors",  package = "plotbiomes")
+
+# Use a function to capitalise names
+title_case <- function(x) gsub("(^|[ /])([a-z])", "\\1\\U\\2", x, perl = TRUE)
+
+# Approximate the position of th labels (mean of each polygon's vertices)
+biome_labels <- Whittaker_biomes |>
+  group_by(biome) |>
+  summarise(temp_c = mean(temp_c), precp_cm = mean(precp_cm), .groups = "drop") |>
+  mutate(label = gsub("/", "/\n", title_case(biome)))   # wrap long names at the slash & capitalise names
+
+# Manually reposition selected labels (x = °C, y = cm)
+label_overrides <- tibble::tribble(~biome, ~temp_c, ~precp_cm,
+                                   "Woodland/shrubland", 12, 75,
+                                   "Temperate grassland/desert", 8, 15,
+                                   "Temperate rain forest", 15, 250,
+                                   "Temperate seasonal forest", 12, 150,
+                                   "Subtropical desert", 25, 30)
+
+# Update label positions
+biome_labels <- rows_update(biome_labels, label_overrides, by = "biome")
+
+# Plot biome plot
+(biome_plot <- ggplot() +
+    geom_polygon(data = Whittaker_biomes,
+                 aes(x = temp_c, y = precp_cm, fill = biome, group = biome_id),
+                 colour = "grey20", linewidth = 0.4) +
+    geom_text(data = biome_labels,
+              aes(x = temp_c, y = precp_cm, label = label),
+              size = 5, lineheight = 0.85, colour = "grey10") +
+    scale_fill_manual(name = "Biome", values = Ricklefs_colors, labels = title_case) +
+    scale_x_continuous(breaks = seq(-15, 30, 5), expand = c(0.01, 0)) +
+    scale_y_continuous(breaks = seq(0, 450, 50), expand = c(0.01, 0)) +
+    labs(x = "Mean Annual Temperature (°C)",
+         y = "Mean Annual Precipitation (cm)",
+         caption = "After Whittaker (1975), as redrawn by Ricklefs (2008); data: plotbiomes") +
+    theme_classic(base_size = 16) +
+    theme(legend.position = "right",
+          panel.grid.minor = element_blank()))
+
+# Save the plot
+ggsave(filename = here("figures", "ThesisMethodsFigure2_Whittaker_Biomes.png"),
+       plot = biome_plot, width = 18, height = 11, dpi = 600)
+ggsave(filename = here("figures", "ThesisMethodsFigure2_Whittaker_Biomes.pdf"),
+       plot = biome_plot, width = 18, height = 11, dpi = 600)
 # END OF SCRIPT ----------------------------------------------------------------
