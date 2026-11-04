@@ -13,6 +13,7 @@ library(here)
 library(plotbiomes)
 library(ggplot2)
 library(dplyr)
+library(rnaturalearth)
 source(here("scripts", "0_setup.R"))
 
 # Define CRS to use for the map (ETRS89 / UTM zone 33N - matches project data)
@@ -198,9 +199,11 @@ biome_labels <- Whittaker_biomes |>
 label_overrides <- tibble::tribble(~biome, ~temp_c, ~precp_cm,
                                    "Woodland/shrubland", 12, 75,
                                    "Temperate grassland/desert", 8, 15,
-                                   "Temperate rain forest", 15, 250,
-                                   "Temperate seasonal forest", 12, 150,
-                                   "Subtropical desert", 25, 30)
+                                   "Temperate rain forest", 14.5, 243,
+                                   "Temperate seasonal forest", 11, 150,
+                                   "Tropical rain forest", 24, 300,
+                                   "Tropical seasonal forest/savanna", 24, 150,
+                                   "Subtropical desert", 24, 30)
 
 # Update label positions
 biome_labels <- rows_update(biome_labels, label_overrides, by = "biome")
@@ -212,15 +215,16 @@ biome_labels <- rows_update(biome_labels, label_overrides, by = "biome")
                  colour = "grey20", linewidth = 0.4) +
     geom_text(data = biome_labels,
               aes(x = temp_c, y = precp_cm, label = label),
-              size = 5, lineheight = 0.85, colour = "grey10") +
+              size = 7, lineheight = 0.85, colour = "black") +
     scale_fill_manual(name = "Biome", values = Ricklefs_colors, labels = title_case) +
     scale_x_continuous(breaks = seq(-15, 30, 5), expand = c(0.01, 0)) +
     scale_y_continuous(breaks = seq(0, 450, 50), expand = c(0.01, 0)) +
     labs(x = "Mean Annual Temperature (°C)",
          y = "Mean Annual Precipitation (cm)",
          caption = "After Whittaker (1975), as redrawn by Ricklefs (2008); data: plotbiomes") +
-    theme_classic(base_size = 16) +
-    theme(legend.position = "right",
+    theme_classic(base_size = 18) +
+    theme(legend.position = "none",
+          axis.text = element_text(size = 16),
           panel.grid.minor = element_blank()))
 
 # Save the plot
@@ -228,4 +232,74 @@ ggsave(filename = here("figures", "ThesisMethodsFigure2_Whittaker_Biomes.png"),
        plot = biome_plot, width = 18, height = 11, dpi = 600)
 ggsave(filename = here("figures", "ThesisMethodsFigure2_Whittaker_Biomes.pdf"),
        plot = biome_plot, width = 18, height = 11, dpi = 600)
+
+# 3. ECOREGIONS MAP ------------------------------------------------------------
+
+# Load WWF biomes
+# Citation: Olson, D. M., Dinerstein, E., Wikramanayake, E. D., Burgess, N. D., Powell, G. V. N., Underwood, E. C., D'Amico, J. A., Itoua, I., Strand, H. E., Morrison, J. C., Loucks, C. J., Allnutt, T. F., Ricketts, T. H., Kura, Y., Lamoreux, J. F., Wettengel, W. W., Hedao, P., Kassem, K. R. 2001. Terrestrial ecoregions of the world: a new map of life on Earth. Bioscience 51(11):933-938.
+global_biomes <- st_read (here("data", "raw_data", "biomes", "wwf_terr_ecos.shp"))
+
+#Load Boreal Forest (BIOME = 6)
+boreal_forest <- st_union(global_biomes[global_biomes$BIOME == 6,])
+
+# Load Tundra (BIOME = 11)
+tundra <- st_union(global_biomes[global_biomes$BIOME == 11 &(global_biomes$REALM == "PA"|global_biomes$REALM == "NA"), ])
+
+# Make sure boreal_forest and tundra are valid geometries
+boreal_forest <- st_make_valid(boreal_forest)
+tundra <- st_make_valid(tundra)
+
+# Check CRS
+biome_crs <- st_crs(boreal_forest)
+
+# Get world basemap
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Define polar projection
+proj_choice<-"+proj=laea +lat_0=90 +lon_0=0 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +units=m +no_defs "
+
+# Transform all spatial objects to the polar projection
+world_polar <- st_transform(world, crs = proj_choice)
+boreal_forest_polar <- st_transform(boreal_forest, crs = proj_choice)
+tundra_polar <- st_transform(tundra, crs = proj_choice)
+
+# Define custom colors for biomes
+mycols <- c("#a5c790", "#c1e1dd")
+
+# Combine the boreal and tundra data for the legend
+biome_data <- rbind(cbind(st_drop_geometry(data.frame(BIOME = 6)), 
+                          st_geometry(boreal_forest_polar)) |> st_sf(),
+                    cbind(st_drop_geometry(data.frame(BIOME = 11)), 
+                          st_geometry(tundra_polar)) |> st_sf())
+
+# Create map with polar projection
+(biomes_polar_proj <- ggplot() +
+    # add biomes
+    geom_sf(data = biome_data, aes(fill = factor(BIOME)), color = NA) +
+    # add country outlines
+    geom_sf(data = world_polar, fill = NA, color = "darkgray", size = 0.2) +
+    # set extent
+    coord_sf(crs = proj_choice, 
+             ylim = c(-703086, 7071423), 
+             xlim = c(-505347.4, 8526158)) +
+    theme_bw() +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          legend.position = c(0.2, 0.1),
+          legend.text = element_text(size = 18),
+          legend.title = element_text(size = 20),
+          plot.title = element_text(face = "bold", size = 12),
+          panel.grid.major = element_line(color = "gray90", linetype = "dashed"),
+          panel.grid.minor = element_blank()) +
+    # add custom colours and legend values
+    scale_fill_manual(values = mycols,
+                      labels = c("Boreal Forest Biome", "Tundra Biome"),
+                      name = "Biome"))
+
+# Save figure
+ggsave(filename = here("figures", "ThesisMethodsFigure3_BorealTundraBiomes.png"),
+       plot = biomes_polar_proj, width = 12, height = 8, dpi = 600)
+ggsave(filename = here("figures", "ThesisMethodsFigure3_BorealTundraBiomes.pdf"),
+       plot = biomes_polar_proj, width = 12, height = 8, dpi = 600)
+
 # END OF SCRIPT ----------------------------------------------------------------
