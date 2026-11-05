@@ -216,7 +216,7 @@ plot_area_scatter <- function(data, var, count_lab, show_legend = FALSE) {
     } else theme(legend.position = "none")
 }
 
-## 1.5. Example pair inset (replaces the legend in panel a) --------------------
+## 1.5. Example pair inset -----------------------------------------------------
 
 # The inset shows one real Development Polygon - Buffer pair in the same colours
 # as the histogram, with its SOR drawn as dots, so it also works as the legend.
@@ -305,6 +305,7 @@ build_example_pair <- function(model_data, chosen_pair = NULL,
       st_drop_geometry() |>
       inner_join(locs, by = "pair_id") |>
       filter(min_locs >= min_locations) |>
+      # dplyr:: because another loaded package masks slice()
       dplyr::slice_max(compactness, n = 1, with_ties = FALSE) |>
       pull(pair_id)
     
@@ -363,14 +364,17 @@ plot_example_inset <- function(example, dot_alpha = 0.5) {
     coord_sf(datum = NA, expand = TRUE, clip = "off") +
     theme_void() +
     theme(legend.position = "none",
-          plot.background = element_rect(fill = scales::alpha("white", 0.8),
-                                         colour = NA))
+          # no background here: the box and "a)" are drawn in section 5 at
+          # exactly inset_pos (the map keeps its shape, so a ggplot background
+          # would only be as wide as the map, not the whole inset area)
+          plot.background = element_blank(),
+          plot.margin = margin(30, 10, 10, 10))
 }
 
 example_inset <- plot_example_inset(example_pair)
 
 # Position of the inset within panel a (fractions of the panel; tweak if needed)
-inset_pos <- c(x = 0.48, y = 0.50, width = 0.50, height = 0.47)
+inset_pos <- c(x = 0.52, y = 0.35, width = 0.47, height = 0.60)
 
 # 2. SHARED SETTINGS FOR ROWS 3-5 ----------------------------------------------
 
@@ -437,7 +441,7 @@ pct_y_axis <- scale_y_continuous(labels = scales::label_percent(accuracy = 1),
                                  limits = c(0, pct_y_max),
                                  expand = expansion(mult = c(0, 0)))
 
-# Panel e: by area type
+# Panel f: by area type
 fig_e <- ggplot(pct_by_type, aes(x = polygon_type, y = prop, fill = polygon_type)) +
   geom_col(width = 0.6) +
   geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.15, linewidth = 0.7) +
@@ -447,7 +451,7 @@ fig_e <- ggplot(pct_by_type, aes(x = polygon_type, y = prop, fill = polygon_type
   labs(x = NULL, y = "Areas with SOR (%)") +
   row_theme
 
-# Panel f: by land cover, Development and Buffer side by side
+# Panel g: by land cover, Development and Buffer side by side
 fig_f <- ggplot(pct_by_lc, aes(x = land_cover_name, y = prop, fill = polygon_type)) +
   geom_col(position = dodge, width = 0.8) +
   geom_errorbar(aes(ymin = lower, ymax = upper),
@@ -461,7 +465,7 @@ fig_f <- ggplot(pct_by_lc, aes(x = land_cover_name, y = prop, fill = polygon_typ
 # 4. ROWS 4-5: VIOLIN PLOTS OF SOR AND SPECIES (AREAS WITH >= 1 RECORD) --------
 
 # Violin + narrow boxplot on a log10 y axis, for areas where var > 0
-# x_var is either "polygon_type" (panels g, i) or "land_cover_name" (h, j)
+# x_var is either "polygon_type" (panels h, j) or "land_cover_name" (i, k)
 plot_violin <- function(data, var, x_var, y_lab, y_limits = NULL) {
   
   d <- data |> filter(.data[[var]] > 0)
@@ -500,11 +504,22 @@ fig_j <- plot_violin(plot_data, "n_species", "land_cover_name",
 
 # 5. ROWS 1-2: SOR AND SPECIES PER AREA ----------------------------------------
 
-# Row 1: panel a has no legend; the example pair inset takes its place
-fig1a <- ggdraw(plot_broken_hist(plot_data, "n_occurrences", "Number of SOR")) +
-  draw_plot(example_inset,
-            x = inset_pos["x"], y = inset_pos["y"],
-            width = inset_pos["width"], height = inset_pos["height"])
+# Row 1: the histogram has no legend; the example pair inset (panel a) sits
+# in its top-right corner, labelled in the same style as the other panels
+(fig1a <- ggdraw(plot_broken_hist(plot_data, "n_occurrences", "Number of SOR")) +
+   # white box with a black border, exactly at inset_pos
+   draw_grob(grid::rectGrob(gp = grid::gpar(fill = scales::alpha("white", 0.8),
+                                            col  = "black",
+                                            lwd  = 0.8 * .pt)),
+             x = inset_pos["x"], y = inset_pos["y"],
+             width = inset_pos["width"], height = inset_pos["height"]) +
+   draw_plot(example_inset,
+             x = inset_pos["x"], y = inset_pos["y"],
+             width = inset_pos["width"], height = inset_pos["height"]) +
+   # "a)" in the top-left corner of the inset box (fractions of panel b)
+   draw_label("a)", fontface = "bold", size = 14, hjust = 0, vjust = 1,
+              x = inset_pos["x"] + 0.015,
+              y = inset_pos["y"] + inset_pos["height"] - 0.015))
 fig1b <- plot_area_scatter(plot_data, "n_occurrences",
                            "log(Number of SOR + 1)", show_legend = TRUE)
 
@@ -517,18 +532,18 @@ fig2b <- plot_area_scatter(plot_data, "n_species", "log(Number of Species + 1)")
 # Relative widths for rows 3-5 (left panel has 2 categories, right has 7 x 2)
 cat_widths <- c(1, 2)
 
-row1 <- plot_grid(fig1a, fig1b, labels = c("a)", "b)"))
-row2 <- plot_grid(fig2a, fig2b, labels = c("c)", "d)"))
-row3 <- plot_grid(fig_e, fig_f, labels = c("e)", "f)"),
+row1 <- plot_grid(fig1a, fig1b, labels = c("b)", "c)"))
+row2 <- plot_grid(fig2a, fig2b, labels = c("d)", "e)"))
+row3 <- plot_grid(fig_e, fig_f, labels = c("f)", "g)"),
                   rel_widths = cat_widths, align = "h", axis = "tb")
-row4 <- plot_grid(fig_g, fig_h, labels = c("g)", "h)"),
+row4 <- plot_grid(fig_g, fig_h, labels = c("h)", "i)"),
                   rel_widths = cat_widths, align = "h", axis = "tb")
-row5 <- plot_grid(fig_i, fig_j, labels = c("i)", "j)"),
+row5 <- plot_grid(fig_i, fig_j, labels = c("j)", "k)"),
                   rel_widths = cat_widths, align = "h", axis = "tb")
 
 # Stack the rows (rows 3-5 a bit shorter than the histogram/scatter rows)
-figure_combined <- plot_grid(row1, row2, row3, row4, row5,
-                             ncol = 1, rel_heights = c(1, 1, 0.75, 0.75, 0.75))
+(figure_combined <- plot_grid(row1, row2, row3, row4, row5,
+                             ncol = 1, rel_heights = c(1, 1, 0.75, 0.75, 0.75)))
 
 # 7. SAVE FIGURE ---------------------------------------------------------------
 
@@ -545,6 +560,27 @@ ggsave(filename = here("figures", "Figure1_SOR_species_combined.pdf"),
        plot = figure_combined,
        width = 17,
        height = 23.5,
+       limitsize = FALSE)
+
+# 8. MINI FIGURE FOR MANUSCRIPT ------------------------------------------------
+
+# Combine row 1 and row 2
+(mini_figure_combined <- plot_grid(row1, row2,
+                                  ncol = 1, rel_heights = c(1, 1)))
+
+# Save figure as .png
+ggsave(filename = here("figures", "Figure1_mini_SOR_species_combined.png"),
+       plot = mini_figure_combined,
+       width = 12,
+       height = 10,
+       dpi = 600,
+       limitsize = FALSE)
+
+# Save figure as .pdf
+ggsave(filename = here("figures", "Figure1_mini_SOR_species_combined.pdf"),
+       plot = figure_combined,
+       width = 12,
+       height = 10,
        limitsize = FALSE)
 
 # END OF SCRIPT ----------------------------------------------------------------
