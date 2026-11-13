@@ -206,6 +206,31 @@ saveRDS(occ_assessed |> filter(group == "LC_baseline"),
         here("data", "derived_data",
              "h4_LC_baseline_polygon_buffer_occurrence_join.rds"))
 
+# Records and species per red-list category: list vs observed
+category_coverage <- occ_assessed |>
+  group_by(redlist_category) |>
+  summarise(n_records = n(),
+            n_species_observed = n_distinct(species),
+            .groups = "drop") |>
+  left_join(redlist_final |> count(redlist_category, name = "n_species_on_list"),
+            by = "redlist_category") |>
+  mutate(pct_of_list_observed = round(100 * n_species_observed / n_species_on_list, 1),
+         redlist_category = factor(redlist_category, levels = severity_order)) |>
+  arrange(redlist_category) |>
+  transmute(`Red List category` = redlist_category,
+            `Species on Red List` = n_species_on_list,
+            `Species observed` = n_species_observed,
+            `% of listed species observed` = pct_of_list_observed,
+            `Occurrence records` = n_records)
+
+# Quick look
+print(category_coverage)
+
+# Save to file
+write.csv(category_coverage,
+          here("figures", "Table_S_H4_redlist_category_coverage.csv"),
+          row.names = FALSE)
+
 ## 3.2. Create a helper function to build a per-side df with category ----------
 
 # Keep all sides
