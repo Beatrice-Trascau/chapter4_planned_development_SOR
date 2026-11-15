@@ -578,7 +578,7 @@ ggsave(filename = here("figures", "Figure1_mini_SOR_species_combined.png"),
 
 # Save figure as .pdf
 ggsave(filename = here("figures", "Figure1_mini_SOR_species_combined.pdf"),
-       plot = figure_combined,
+       plot = mini_figure_combined,
        width = 12,
        height = 10,
        limitsize = FALSE)
